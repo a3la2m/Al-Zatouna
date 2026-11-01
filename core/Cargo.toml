@@ -17,6 +17,8 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
 tempfile = { version = "3", optional = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
 
 [features]
 test-utils = ["dep:tempfile"]

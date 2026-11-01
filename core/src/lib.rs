@@ -10,6 +10,7 @@
 //! shell (`ec-app`) — the dependency direction is one-way.
 
 pub mod common;
+pub mod auth;
 pub mod config;
 pub mod database;
 pub mod error;
