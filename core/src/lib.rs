@@ -14,6 +14,7 @@ pub mod auth;
 pub mod config;
 pub mod database;
 pub mod error;
+pub mod education;
 pub mod people;
 
 pub use error::AppError;

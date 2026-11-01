@@ -10,6 +10,15 @@ use tokio::sync::Mutex;
 use ec_core::auth::service::{AuthService, LoginResult, SessionUserDto};
 use ec_core::config::{data_dir::DataDir, AppSettings};
 use ec_core::error::AppErrorDto;
+use ec_core::people::context::Actor;
+use ec_core::people::students::{
+    create_student, edit_student, list_students, set_student_status, NewStudent, StudentFilter,
+    StudentPatch,
+};
+use ec_core::people::teachers::{
+    create_room, create_subject, create_teacher, list_rooms, list_subjects, list_teachers,
+    NewTeacher, TeacherPatch,
+};
 
 /// Managed app state — pool + data directory handle + settings cache.
 /// All swappable pieces sit behind interior mutability so the first-run
@@ -150,6 +159,214 @@ async fn auth_change_password(
     Ok(auth.change_password(&token, &current, &new_password).await?)
 }
 
+// ---------- Phase 4 people commands ----------
+
+impl AppState {
+    /// Resolve a session token into an `Actor` for domain services.
+    async fn actor(&self, token: &str) -> Result<Actor, AppErrorDto> {
+        let auth = self.auth.lock().await;
+        let su = auth.session_user(token).await?;
+        Ok(Actor {
+            user_id: su.user_id,
+            username: su.username,
+            permissions: su.permissions,
+        })
+    }
+}
+
+#[tauri::command]
+async fn students_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    full_name: String,
+    national_id: String,
+    birth_date: String,
+    gender: Option<String>,
+    phone: String,
+    email: String,
+    address: String,
+    notes: String,
+) -> Result<ec_core::people::students::Student, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_student(
+        &pool, &actor, branch_id,
+        &NewStudent { full_name, national_id, birth_date, gender, phone, email, address, notes },
+    )
+    .await?)
+}
+
+#[tauri::command]
+async fn students_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    status: Option<String>,
+    search: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<ec_core::people::students::Student>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_students(&pool, &actor, branch_id, &StudentFilter {
+        status,
+        search,
+        limit: limit.unwrap_or(100),
+    })
+    .await?)
+}
+
+#[tauri::command]
+async fn students_edit(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+    full_name: Option<String>,
+    national_id: Option<String>,
+    birth_date: Option<String>,
+    gender: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    address: Option<String>,
+    notes: Option<String>,
+) -> Result<ec_core::people::students::Student, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(edit_student(&pool, &actor, id, &StudentPatch {
+        full_name, national_id, birth_date, gender, phone, email, address, notes,
+    })
+    .await?)
+}
+
+#[tauri::command]
+async fn students_set_status(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+    status: String,
+    reason: String,
+) -> Result<ec_core::people::students::Student, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(set_student_status(&pool, &actor, id, &status, &reason).await?)
+}
+
+#[tauri::command]
+async fn teachers_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    full_name: String,
+    phone: String,
+    email: String,
+    specialty: String,
+    qualifications: String,
+    address: String,
+    hire_date: String,
+    notes: String,
+) -> Result<ec_core::people::teachers::Teacher, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_teacher(&pool, &actor, branch_id, &NewTeacher {
+        full_name, phone, email, specialty, qualifications, address, hire_date, notes,
+    })
+    .await?)
+}
+
+#[tauri::command]
+async fn teachers_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    status: Option<String>,
+    search: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<ec_core::people::teachers::Teacher>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_teachers(&pool, &actor, branch_id, &ec_core::people::teachers::TeacherFilter {
+        status,
+        search,
+        limit: limit.unwrap_or(100),
+    })
+    .await?)
+}
+
+#[tauri::command]
+async fn teachers_edit(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+    full_name: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    specialty: Option<String>,
+    qualifications: Option<String>,
+    address: Option<String>,
+    hire_date: Option<String>,
+    notes: Option<String>,
+) -> Result<ec_core::people::teachers::Teacher, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(ec_core::people::teachers::edit_teacher(
+        &pool,
+        &actor,
+        id,
+        &TeacherPatch { full_name, phone, email, specialty, qualifications, address, hire_date, notes },
+    )
+    .await?)
+}
+
+#[tauri::command]
+async fn subjects_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    code: String,
+    name: String,
+    description: String,
+) -> Result<ec_core::people::teachers::Subject, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_subject(&pool, &actor, &code, &name, &description).await?)
+}
+
+#[tauri::command]
+async fn subjects_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    active_only: bool,
+) -> Result<Vec<ec_core::people::teachers::Subject>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_subjects(&pool, &actor, active_only).await?)
+}
+
+#[tauri::command]
+async fn rooms_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    code: String,
+    name: String,
+    capacity: i64,
+    description: String,
+) -> Result<ec_core::people::teachers::Room, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_room(&pool, &actor, branch_id, &code, &name, capacity, &description).await?)
+}
+
+#[tauri::command]
+async fn rooms_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+) -> Result<Vec<ec_core::people::teachers::Room>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_rooms(&pool, &actor, branch_id).await?)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -164,7 +381,18 @@ pub fn run() {
             auth_login,
             auth_logout,
             auth_me,
-            auth_change_password
+            auth_change_password,
+            students_create,
+            students_list,
+            students_edit,
+            students_set_status,
+            teachers_create,
+            teachers_list,
+            teachers_edit,
+            subjects_create,
+            subjects_list,
+            rooms_create,
+            rooms_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
