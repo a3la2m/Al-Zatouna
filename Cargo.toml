@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "local-time"] }
+dirs = "6"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v7"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

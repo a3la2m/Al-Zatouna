@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Education Center",
+  "version": "0.1.0",
+  "identifier": "com.educationcenter.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../web dev",
+    "beforeBuildCommand": "pnpm --dir ../web build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web/build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "نظام إدارة المركز التعليمي",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "msi", "dmg"],
+    "icon": []
+  }
+}

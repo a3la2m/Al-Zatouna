@@ -1,0 +1,63 @@
+# SECURITY — Security, permissions, audit
+## Education Center Management System (Phase 1)
+
+## 1. Identity and authentication
+
+- Local user accounts only (`users` table). Username/password login.
+- Password hashing: **Argon2id** (memory 64 MiB, iterations 3, parallelism 1) — never plaintext, never reversible forms in the DB or logs.
+- Password policy: minimum 8 chars, cannot equal username, optional complexity per setting; forced change on first login; forced change after administrative reset.
+- Session management: webview-local session token referencing a Rust-side session record; auto-inactivity lock configurable (default 20 min) requiring re-authentication; login/logout logged.
+- Failed attempts: lockout after N attempts (default 5) for M minutes; logged, visible to admins only.
+- Password recovery: no self-service; performed by an admin with `users.password_reset` permission, forces change at next login and writes an audit entry (reason optional, actor recorded).
+- Personal data access: teacher list limited per data-isolation rule (§3).
+
+## 2. RBAC model
+
+- entities: `roles`, `permissions`, `role_permissions`, `user_roles`, `user_permission_overrides` (allow or deny per user).
+- Evaluation: user → roles ∪ (+) overrides allowed ∪ (-) overrides denied; denied always wins.
+- Built-in roles (system, not deletable): `system_admin`, `center_manager`, `accountant`, `registration_clerk`, `scheduler`, `teacher`, `read_only`.
+- Built-in roles ship with a sensible seeded permission set; the manager may add custom roles or adjust memberships. System admin cannot be removed from the last admin in existence.
+
+## 3. Permission catalog (codes)
+
+Group `students`: `students.view`, `students.create`, `students.edit`, `students.archive`, `students.attachments.manage`
+Group `teachers`: `teachers.view`, `teachers.manage`, `teachers.attachments.manage`
+Group `courses`: `subjects.manage`, `rooms.manage`, `courses.view`, `courses.create`, `courses.edit`, `courses.approve`, `courses.amend`
+Group `scheduling`: `schedule.manage`, `sessions.executed`, `sessions.cancel`, `sessions.makeup`, `attendance.record`, `attendance.teacher.record`
+Group `finance`: `shortfall.propose`, `shortfall.decide`, `refunds.request`, `refunds.approve`, `settlements.prepare`, `settlements.approve`, `ledger.view`, `agreements.manage`
+Group `money`: `vouchers.receipt.create`, `vouchers.receipt.approve`, `vouchers.payment.create`, `vouchers.payment.approve`, `payments.record`, `cash.manage`, `cash.close`, `expenses.create`, `expenses.approve`
+Group `reports`: `reports.view`, `reports.export`, `reports.builder`
+Group `invoices/print`: `print.profiles.manage`, `print.execute`
+Group `admin`: `users.manage`, `users.password_reset`, `roles.manage`, `permissions.assign`, `audit.view`, `settings.manage`, `backup.create`, `backup.restore`, `datadir.change`
+
+Maker–checker: `*.approve` permissions gate approval; the approve endpoints refuse the creator's own records (`created_by == approver → AppError::Permission { override_possible:false }`); the only documented bypass is center "admin override allowed" setting at module level, still recording an `override_reason` + audit entry.
+
+Data isolation: all list/read commands enforce a scope filter by caller's role (teacher → own course/session/entitlement data; registration clerk → no financial records except own voucher linkage).
+
+## 4. Command layer hardening (Tauri)
+
+- Every command handler runs through the permission wrapper (see ARCHITECTURE §4) — unauthenticated or unauthorized calls are rejected before any logic runs.
+- Input validation with typed serde structs; string lengths/ranges/arbitrary numeric bounds; cross-field validators in services.
+- File ranges: all file paths produced or accepted must resolve under `<DATA>` (checked by joining and canonicalizing; the join result must remain within the data root — path traversal prevented).
+- Uploading attachments: accepted extensions per entity (images: jpg/png/webp; docs: pdf/jpg...), size caps per type, MIME sniff vs extension mismatch rejected, uploads stored under `<DATA>/attachments/...` with stored filename uuid (original names kept metadata-only) → prevents executable uploads/path injection.
+- No secrets or system details exposed in errors to the UI; internal details logged via tracing only.
+- Tauri fs scope: only explicit subdirectories exposed to the webview; dialog-mediated file access; no shell utilities exposed to frontend.
+
+## 5. Storage security
+
+- Data files under the OS-protected user directory with User-ACLs (Windows) / user ownership (Unix); installer never grants group-write.
+- Audit log writes go only through the audit service (append-only); direct table modification by other services is disallowed by triggers (see DATABASE §4).
+- Backup files: not encrypted by default; **opt-in encryption** planned (AEAD with key derived from user-supplied secret, key never stored alongside the data) — design hook present in `backup` module; disabled in V1 with a visible, dated scope note.
+- Portable mode note: the user accepts reduced ACLs; notification in wizard when the target directory is world-writable.
+
+## 6. Audit events (mandatory log list)
+
+`login, logout, login_failed, user_created, user_updated, user_disabled, password_changed, password_reset, permission_changed, students.create/edit/archive, teachers.create/edit/archive, courses.create/edit/approve/amend/status, sessions.change (create/edit/cancel/makeup/substitute), attendance.record, agreements.create/approve/amend, enrollments.create/edit/status, payment.record, shortfall.propose/decide, refunds.request/approve/paid, settlements.prepare/approve/reverse, vouchers.issue/reprint/cancel, register.open/close/approve_variance, expenses.create/approve/paid, entries.posted/reversed, data_directory.changed, backup.created/restored, print.printed/exported, reports.exported, settings.changed(print/backup/general)`
+
+Each event stores: user, timestamp, action, entity type/id, old/new JSON when applicable, reason (mandatory events list: cancellations, approvals, deletions-of-status, amendments, overrides), session context (window id).
+
+## 7. Threat notes (desktop scope)
+
+- Local device trust: assume anyone with filesystem access can read the DB file; protection strategy is OS-accounts + optional encryption (future) + backup hygiene. Documented, not a V1 guarantee.
+- Idempotency duplication protection acts as a security control against double-click financial abuse (SESSION+user+key).
+- Audit log integrity: a nightly hash-chain check over audit rows is designed as an optional later-phase mechanism.
