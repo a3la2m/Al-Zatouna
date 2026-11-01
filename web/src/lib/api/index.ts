@@ -5,12 +5,21 @@ import { isTauri } from '$lib/env';
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
-let invokeImpl: <T>(cmd: string, args?: InvokeArgs) => Promise<T> | null = null;
+type InvokeFn = <T>(cmd: string, args?: InvokeArgs) => Promise<T>;
 
-if (isTauri) {
-  // dynamic import keeps the plain-browser dev preview working
-  const tauriApi = await import('@tauri-apps/api/core');
-  invokeImpl = tauriApi.invoke;
+let invokeImpl: InvokeFn | null = null;
+let loading: Promise<InvokeFn | null> | null = null;
+
+/// Lazy-load @tauri-apps/api/core on the first real call (no top-level
+/// await — keeps the built target compatible with older esbuild targets).
+async function loadInvoke(): Promise<InvokeFn | null> {
+  if (invokeImpl) return invokeImpl;
+  if (!isTauri) return null;
+  loading ??= import('@tauri-apps/api/core').then((m) => {
+    invokeImpl = m.invoke as InvokeFn;
+    return invokeImpl;
+  });
+  return await loading;
 }
 
 export class ApiError extends Error {
@@ -30,13 +39,14 @@ export async function invoke<T = unknown>(
   cmd: string,
   args?: InvokeArgs
 ): Promise<T> {
-  if (!invokeImpl) {
+  const fn = await loadInvoke();
+  if (!fn) {
     throw new ApiError({
       code: 'not_in_tauri',
       message: 'يمكن تشغيل هذا الإجراء داخل التطبيق فقط'
     });
   }
-  return await invokeImpl<T>(cmd, args);
+  return await fn<T>(cmd, args);
 }
 
 export async function safeInvoke<T = unknown>(

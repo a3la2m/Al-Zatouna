@@ -91,6 +91,11 @@ impl SessionStore {
                 .unwrap_or_else(Instant::now);
         }
     }
+
+    /// Drop every live session (first-run wizard rebinds the database).
+    pub async fn clear(&self) {
+        self.sessions.lock().await.clear();
+    }
 }
 
 pub struct AuthService {
