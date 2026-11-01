@@ -30,3 +30,6 @@ Each decision: context → options → choice → consequences. New material cha
 | ADR-023 | Phase 1 | Charts: ECharts | Strong RTL/Arabic label support and consistent rendering inside webview |
 | ADR-024 | Phase 1 | Inactivity lock default 20 min; configurable | Practical desktop security default |
 | ADR-025 | Phase 1 | Backup encryption designed as a hook but disabled in V1 | Complexity tradeoff: keeps values opt-in with a dated scope note |
+| ADR-026 | Phase 2 | Cargo workspace split: core crate `ec-core` (all business logic) + thin Tauri shell `ec-app` in `src-tauri`; migrations live in `core/migrations`; frontend in `web/` | Lets every phase gate `cargo test -p ec-core` without a GUI; shell stays dumb per ADR-008 |
+| ADR-027 | Phase 3 | Auth sessions live in a Rust-side in-memory store (opaque 32-byte token); lockout counters, `last_login_at` and audit rows stay durable in SQLite | Desktop semantics (sessions die at app exit), no new schema table needed; `must_change_password`/`locked_until` columns already exist from migration 0001 |
+| ADR-028 | Phase 3 | Inactivity auto-lock is enforced server-side at session verification (`SessionStore::verify`), not by UI timers | UI-timer enforcement is spoofable; verification refreshes activity on each successful call |
