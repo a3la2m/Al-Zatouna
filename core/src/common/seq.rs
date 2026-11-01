@@ -91,7 +91,6 @@ pub async fn seed_sequence(
 mod tests {
     use super::*;
     use crate::database;
-    use sqlx::Row;
 
     #[tokio::test]
     async fn allocation_inside_rolled_back_transaction_leaves_no_gap() {

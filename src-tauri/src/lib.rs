@@ -4,7 +4,7 @@
 //! services, and serialize the result. Business logic lives in `ec-core`
 //! (ADR-008: permission enforcement and money math never live here).
 
-use tauri::{Manager, State};
+use tauri::Manager;
 use tokio::sync::Mutex;
 
 use ec_core::config::{data_dir::DataDir, AppSettings};
@@ -41,7 +41,7 @@ async fn wizard_choose_data_dir(
 ) -> Result<serde_json::Value, AppErrorDto> {
     let chosen = path.map(std::path::PathBuf::from);
     let result =
-        ec_core::config::bootstrap_first_run(chosen.as_deref().map(|p| p.as_path()))
+        ec_core::config::bootstrap_first_run(chosen.as_deref().map(std::path::Path::new))
             .await;
     match result {
         Ok((pool, dd)) => {
@@ -71,7 +71,6 @@ async fn app_ready_state() -> Option<AppState> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let rt = tauri::async_runtime::handle();
             let state = tauri::async_runtime::block_on(app_ready_state());
             app.manage(state as Option<AppState>);
             Ok(())

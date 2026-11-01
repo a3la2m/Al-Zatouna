@@ -1,0 +1,19 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / SvelteKit
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/.pnpm-store/
+
+# Local data dirs used during development
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
+Thumbs.db

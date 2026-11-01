@@ -4,11 +4,11 @@
 use std::path::PathBuf;
 
 use ec_core::common::{allocate_next_no, seed_sequence, SequenceKind};
-use ec_core::database::{
-    integrity_check, open_pool, quick_check, run_migrations, test_utils, wal_checkpoint,
-    scan_money_column_storage,
-};
 use ec_core::database::test_utils::fresh_seeded_pool;
+use ec_core::database::{
+    integrity_check, open_pool, quick_check, run_migrations, scan_money_column_storage,
+    test_utils, wal_checkpoint,
+};
 use sqlx::Row;
 
 // db001 — fresh DB from empty file: migrations idempotent, seeds present.
@@ -53,7 +53,6 @@ async fn db001_create_fresh_db() {
     .await
     .unwrap();
     assert_eq!(n, 1);
-    let _ = branch_id;
 }
 
 // db002 — migrations chain applies in order; a second run is a no-op;
@@ -128,7 +127,7 @@ async fn db004_wal() {
 // db005 — transaction atomicity: mid-command failure leaves nothing behind.
 #[tokio::test]
 async fn db005_transaction_atomicity() {
-    let (pool, _t, branch_id) = fresh_seeded_pool().await;
+    let (pool, _t, _branch_id) = fresh_seeded_pool().await;
     let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
         .fetch_one(&pool)
         .await
