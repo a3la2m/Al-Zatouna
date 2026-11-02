@@ -65,7 +65,18 @@ export const peopleApi = {
         address: string;
         notes: string;
       }
-    ) => invoke<Student>('students_create', { token, ...data }),
+    ) => invoke<Student>('students_create', {
+      token,
+      branch_id: data.branch_id,
+      full_name: data.full_name,
+      national_id: data.national_id,
+      birth_date: data.birth_date,
+      gender: data.gender,
+      phone: data.phone,
+      email: data.email,
+      address: data.address,
+      notes: data.notes
+    }),
 
     list: (
       token: string,

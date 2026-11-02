@@ -57,8 +57,7 @@
 
 <aside
   class="right-0 h-full border-l border-[var(--ec-border)] bg-[var(--ec-navy)] text-white transition-all duration-200"
-  class:w-[260px]={!collapsed}
-  class:w-[64px]={collapsed}
+  class:w-[260px]={true}
 >
   <div class="flex items-center justify-between px-3 py-4">
     {#if !collapsed}

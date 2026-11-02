@@ -19,6 +19,20 @@ use ec_core::people::teachers::{
     create_room, create_subject, create_teacher, list_rooms, list_subjects, list_teachers,
     NewTeacher, TeacherPatch,
 };
+use ec_core::education::courses::{
+    create_course, list_courses, set_course_status, NewCourse,
+};
+use ec_core::education::sessions::{
+    create_session, list_sessions, set_session_status, Session,
+};
+use ec_core::education::attendance::{
+    record_student_attendance, record_teacher_attendance,
+};
+use ec_core::vouchers::cash::{close_register, open_register, record_cash_movement};
+use ec_core::finance::payments::{record_payment, PaymentAllocation};
+use ec_core::finance::ledger::{post_entry, NewJournalEntry, JournalLine};
+use ec_core::vouchers::expenses::{approve_expense, create_expense};
+use ec_core::reports::{list_reports, save_report};
 
 /// Managed app state — pool + data directory handle + settings cache.
 /// All swappable pieces sit behind interior mutability so the first-run
@@ -58,7 +72,7 @@ async fn app_ready_state() -> AppState {
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn app_info(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let pool = state.pool.lock().await.clone();
     let accounts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
@@ -80,7 +94,7 @@ async fn app_info(state: tauri::State<'_, AppState>) -> Result<serde_json::Value
 
 /// First-run wizard step: pick a data directory and bootstrap everything
 /// (tree, DB, migrations, settings). Rebinds pool/auth/data-dir in place.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn wizard_choose_data_dir(
     state: tauri::State<'_, AppState>,
     path: Option<String>,
@@ -106,7 +120,7 @@ async fn wizard_choose_data_dir(
 // ---------- Phase 3 auth commands ----------
 
 /// Create the first admin (only valid while no users exist — wizard step 2).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn auth_create_admin(
     state: tauri::State<'_, AppState>,
     username: String,
@@ -119,7 +133,7 @@ async fn auth_create_admin(
 }
 
 /// Login with username/password → session token + permission set.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn auth_login(
     state: tauri::State<'_, AppState>,
     username: String,
@@ -130,14 +144,14 @@ async fn auth_login(
 }
 
 /// End the current session.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn auth_logout(state: tauri::State<'_, AppState>, token: String) -> Result<(), AppErrorDto> {
     let auth = state.auth.lock().await;
     Ok(auth.logout(&token).await?)
 }
 
 /// Current session summary (window focus / inactivity re-check in UI).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn auth_me(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -148,7 +162,7 @@ async fn auth_me(
 }
 
 /// Self-service password change.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn auth_change_password(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -174,7 +188,7 @@ impl AppState {
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn students_create(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -197,7 +211,7 @@ async fn students_create(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn students_list(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -216,7 +230,7 @@ async fn students_list(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn students_edit(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -238,7 +252,7 @@ async fn students_edit(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn students_set_status(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -251,7 +265,7 @@ async fn students_set_status(
     Ok(set_student_status(&pool, &actor, id, &status, &reason).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn teachers_create(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -273,7 +287,7 @@ async fn teachers_create(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn teachers_list(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -292,7 +306,7 @@ async fn teachers_list(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn teachers_edit(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -317,7 +331,7 @@ async fn teachers_edit(
     .await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn subjects_create(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -330,7 +344,7 @@ async fn subjects_create(
     Ok(create_subject(&pool, &actor, &code, &name, &description).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn subjects_list(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -341,7 +355,7 @@ async fn subjects_list(
     Ok(list_subjects(&pool, &actor, active_only).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn rooms_create(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -356,7 +370,7 @@ async fn rooms_create(
     Ok(create_room(&pool, &actor, branch_id, &code, &name, capacity, &description).await?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn rooms_list(
     state: tauri::State<'_, AppState>,
     token: String,
@@ -365,6 +379,209 @@ async fn rooms_list(
     let actor = state.actor(&token).await?;
     let pool = state.pool.lock().await.clone();
     Ok(list_rooms(&pool, &actor, branch_id).await?)
+}
+
+
+#[tauri::command(rename_all = "snake_case")]
+async fn courses_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    status: Option<String>,
+) -> Result<Vec<ec_core::education::courses::Course>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_courses(&pool, &actor, branch_id, status.as_deref()).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn courses_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    name: String,
+    subject_id: i64,
+    teacher_id: i64,
+    room_id: i64,
+    fee_minor: i64,
+    is_private: bool,
+) -> Result<ec_core::education::courses::Course, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_course(&pool, &actor, branch_id, &NewCourse {
+        name, subject_id, teacher_id, room_id, fee_minor, is_private, ..Default::default()
+    }).await?)
+}
+
+
+#[tauri::command(rename_all = "snake_case")]
+async fn cash_open_register(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    code: String,
+) -> Result<i64, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(open_register(&pool, &actor, branch_id, &code).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn cash_record_movement(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    register_id: i64,
+    kind: String,
+    direction: String,
+    amount_minor: i64,
+    ref_type: String,
+) -> Result<ec_core::vouchers::cash::CashMovement, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(record_cash_movement(&pool, &actor, register_id, &kind, &direction, amount_minor, &ref_type, None).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn expenses_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    category_id: i64,
+    expense_date: String,
+    amount_minor: i64,
+    beneficiary: String,
+    description: String,
+    method: String,
+    account_id: i64,
+) -> Result<ec_core::vouchers::expenses::Expense, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_expense(&pool, &actor, branch_id, category_id, &expense_date, amount_minor, &beneficiary, &description, &method, account_id).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn expenses_approve(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+) -> Result<ec_core::vouchers::expenses::Expense, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(approve_expense(&pool, &actor, id).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn reports_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<Vec<ec_core::reports::SavedReport>, AppErrorDto> {
+    let _actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_reports(&pool).await.map_err(|e| ec_core::error::AppError::storage(e.to_string()))?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn reports_save(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    name: String,
+    definition_json: String,
+) -> Result<i64, AppErrorDto> {
+    let _actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(save_report(&pool, &name, &definition_json).await.map_err(|e| ec_core::error::AppError::storage(e.to_string()))?)
+}
+
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sessions_list(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    course_id: Option<i64>,
+) -> Result<Vec<Session>, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(list_sessions(&pool, &actor, course_id, None, None).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sessions_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    course_id: i64,
+    session_date: String,
+    start_time: String,
+    end_time: String,
+    room_id: i64,
+    teacher_id: i64,
+    seq_in_course: i64,
+) -> Result<Session, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_session(&pool, &actor, course_id, &session_date, &start_time, &end_time, room_id, teacher_id, None, seq_in_course, None).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn sessions_set_status(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+    status: String,
+    reason: String,
+) -> Result<Session, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(set_session_status(&pool, &actor, id, &status, &reason, None, None).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn attendance_record_student(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    session_id: i64,
+    student_id: i64,
+    status: String,
+    late_minutes: i64,
+) -> Result<ec_core::education::attendance::StudentAttendance, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(record_student_attendance(&pool, &actor, session_id, student_id, &status, late_minutes, "").await?)
+}
+
+
+#[tauri::command(rename_all = "snake_case")]
+async fn payments_record(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    enrollment_id: i64,
+    amount_minor: i64,
+    idempotency_key: String,
+) -> Result<ec_core::finance::payments::PaymentResult, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    let cash: i64 = sqlx::query_scalar("SELECT id FROM accounts LIMIT 1").fetch_one(&pool).await.map_err(ec_core::error::AppError::from)?;
+    let recv: i64 = sqlx::query_scalar("SELECT id FROM accounts LIMIT 1 OFFSET 1").fetch_one(&pool).await.map_err(ec_core::error::AppError::from)?;
+    Ok(record_payment(&pool, &actor, 1, cash, recv, &idempotency_key, &[PaymentAllocation { enrollment_id, amount_minor }], "payment").await?)
+}
+
+
+#[tauri::command(rename_all = "snake_case")]
+async fn vouchers_list_receipts(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<Vec<serde_json::Value>, AppErrorDto> {
+    let _actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    let rows = sqlx::query("SELECT id, voucher_no, amount_minor, status, voucher_date FROM receipt_vouchers ORDER BY id DESC")
+        .fetch_all(&pool).await.map_err(ec_core::error::AppError::from)?;
+    use sqlx::Row;
+    Ok(rows.iter().map(|r| serde_json::json!({
+        "id": r.get::<i64,_>("id"),
+        "voucher_no": r.get::<i64,_>("voucher_no"),
+        "amount_minor": r.get::<i64,_>("amount_minor"),
+        "status": r.get::<String,_>("status"),
+        "voucher_date": r.get::<String,_>("voucher_date"),
+    })).collect())
 }
 
 pub fn run() {
@@ -392,7 +609,21 @@ pub fn run() {
             subjects_create,
             subjects_list,
             rooms_create,
-            rooms_list
+            rooms_list,
+            courses_list,
+            courses_create,
+            cash_open_register,
+            cash_record_movement,
+            expenses_create,
+            expenses_approve,
+            reports_list,
+            reports_save,
+            sessions_list,
+            sessions_create,
+            sessions_set_status,
+            attendance_record_student,
+            payments_record,
+            vouchers_list_receipts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
