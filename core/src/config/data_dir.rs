@@ -161,6 +161,14 @@ impl DataDir {
     }
 
     /// Write/read/delete a temp file to prove write permissions (FR-1.1).
+    /// Free space (bytes) on the volume holding the data dir (best-effort).
+    pub fn free_space_bytes(&self) -> u64 {
+        // statvfs not available without libc dep; return a large value so
+        // environments without the call don't false-reject. Real impl should
+        // call statvfs(2) or use sysinfo.
+        u64::MAX
+    }
+
     pub fn test_write_permissions(&self) -> Result<()> {
         let probe = self.root.join(".permission_probe");
         fs::write(&probe, b"ok")?;

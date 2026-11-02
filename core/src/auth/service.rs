@@ -431,6 +431,41 @@ impl AuthService {
         Ok(())
     }
 
+    /// Disable a user (no deletion; history preserved). Requires users.manage.
+    pub async fn disable_user(
+        &self,
+        token: &str,
+        target_user_id: i64,
+        reason: &str,
+    ) -> AppResult<()> {
+        let su = self.require(token, "users.manage").await?;
+        if su.user_id == target_user_id {
+            return Err(AppError::Conflict("لا يمكن تعطيل حسابك الخاص".into()));
+        }
+        sqlx::query(
+            "UPDATE users SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+        )
+        .bind(target_user_id)
+        .execute(&self.pool)
+        .await?;
+        audit::log(
+            &self.pool,
+            audit::AuditEvent {
+                user_id: Some(su.user_id),
+                action: "user_disabled",
+                entity_type: "users",
+                entity_id: Some(target_user_id),
+                old: None,
+                new: None,
+                reason,
+                ctx: None,
+            },
+        )
+        .await
+        .ok();
+        Ok(())
+    }
+
     async fn audit_failure(&self, user_id: Option<i64>, username: &str) {
         audit::log(
             &self.pool,

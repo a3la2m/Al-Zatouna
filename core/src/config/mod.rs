@@ -121,6 +121,37 @@ pub async fn bootstrap_first_run(
 }
 
 /// Startup path for non-first runs: resolve + open + migrate (+ quick check).
+/// Change the data directory: backup current DB, copy to new location,
+/// verify integrity, update settings. Returns the new pool + DataDir.
+/// The caller must drop the old pool before calling.
+pub async fn change_data_dir(new_root: &std::path::Path) -> Result<(sqlx::SqlitePool, DataDir)> {
+    let settings = load();
+    let old_dir = settings.data_directory.clone();
+    let new_dd = DataDir::from_root(new_root);
+    new_dd.create_tree()?;
+    new_dd.test_write_permissions()?;
+    // if old db exists, copy it
+    if let Some(old) = old_dir {
+        let old_db = std::path::Path::new(&old).join("database").join("education_center.db");
+        if old_db.exists() {
+            let new_db = new_dd.db_path();
+            std::fs::create_dir_all(new_db.parent().unwrap())?;
+            std::fs::copy(&old_db, &new_db)?;
+        }
+    }
+    let pool = crate::database::open_pool(&new_dd.db_path()).await?;
+    crate::database::run_migrations(&pool, env!("CARGO_PKG_VERSION")).await?;
+    let check = crate::database::quick_check(&pool).await?;
+    if check != "ok" {
+        return Err(AppError::storage(format!("quick check failed: {check}")));
+    }
+    let mut new_settings = settings;
+    new_settings.data_directory = Some(new_dd.root().to_string_lossy().to_string());
+    new_settings.first_run_completed = true;
+    save(&new_settings)?;
+    Ok((pool, new_dd))
+}
+
 pub async fn open_data() -> Result<(sqlx::SqlitePool, DataDir)> {
     let settings = load();
     let data_dir = resolve_data_dir(&settings)?.0;

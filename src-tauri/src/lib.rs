@@ -584,6 +584,46 @@ async fn vouchers_list_receipts(
     })).collect())
 }
 
+
+#[tauri::command(rename_all = "snake_case")]
+async fn auth_disable_user(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    target_user_id: i64,
+    reason: String,
+) -> Result<(), AppErrorDto> {
+    let auth = state.auth.lock().await;
+    Ok(auth.disable_user(&token, target_user_id, &reason).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn finance_accrue_enrollment(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    enrollment_id: i64,
+    amount_minor: i64,
+    receivable_account: i64,
+    deferred_account: i64,
+) -> Result<i64, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(ec_core::finance::accrue_enrollment(&pool, &actor, enrollment_id, amount_minor, receivable_account, deferred_account).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn finance_recognize_revenue(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    enrollment_id: i64,
+    amount_minor: i64,
+    deferred_account: i64,
+    revenue_account: i64,
+) -> Result<i64, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(ec_core::finance::recognize_revenue(&pool, &actor, enrollment_id, amount_minor, deferred_account, revenue_account).await?)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -599,6 +639,7 @@ pub fn run() {
             auth_logout,
             auth_me,
             auth_change_password,
+            auth_disable_user,
             students_create,
             students_list,
             students_edit,
@@ -623,6 +664,8 @@ pub fn run() {
             sessions_set_status,
             attendance_record_student,
             payments_record,
+            finance_accrue_enrollment,
+            finance_recognize_revenue,
             vouchers_list_receipts
         ])
         .run(tauri::generate_context!())

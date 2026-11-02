@@ -188,9 +188,20 @@ pub async fn set_course_status(
             "انتقال غير مسموح: {} → {}", before.status, new_status
         )));
     }
-    // approve gate: registration_open→active requires courses.approve
+    // approve gate: registration_open→active requires courses.approve AND an active agreement
     if new_status == "active" {
         actor.require("courses.approve")?;
+        let has_agreement: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM financial_agreements WHERE course_id = ? AND status = 'active'",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        if has_agreement == 0 {
+            return Err(AppError::Conflict(
+                "لا يمكن اعتماد الدورة بدون اتفاقية مالية نشطة".into(),
+            ));
+        }
     } else {
         actor.require("courses.edit")?;
     }
