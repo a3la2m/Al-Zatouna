@@ -29,6 +29,7 @@ use ec_core::education::attendance::{
     record_student_attendance, record_teacher_attendance,
 };
 use ec_core::vouchers::cash::{close_register, open_register, record_cash_movement};
+use ec_core::vouchers::payment_vouchers::{approve_payment_voucher, create_payment_voucher, pay_payment_voucher, PaymentVoucher};
 use ec_core::finance::payments::{record_payment, PaymentAllocation};
 use ec_core::finance::ledger::{post_entry, NewJournalEntry, JournalLine};
 use ec_core::vouchers::expenses::{approve_expense, create_expense};
@@ -624,6 +625,52 @@ async fn finance_recognize_revenue(
     Ok(ec_core::finance::recognize_revenue(&pool, &actor, enrollment_id, amount_minor, deferred_account, revenue_account).await?)
 }
 
+
+#[tauri::command(rename_all = "snake_case")]
+async fn payment_vouchers_create(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    branch_id: i64,
+    beneficiary_type: String,
+    teacher_id: Option<i64>,
+    purpose: String,
+    amount_minor: i64,
+    method: String,
+    account_id: i64,
+    source_type: String,
+    source_id: Option<i64>,
+    idempotency_key: String,
+) -> Result<PaymentVoucher, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(create_payment_voucher(&pool, &actor, branch_id, &beneficiary_type, teacher_id, &purpose, amount_minor, &method, account_id, &source_type, source_id, &idempotency_key).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn payment_vouchers_approve(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+) -> Result<PaymentVoucher, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    let maker: i64 = sqlx::query_scalar("SELECT created_by FROM payment_vouchers WHERE id = ?").bind(id).fetch_one(&pool).await.map_err(ec_core::error::AppError::from)?;
+    Ok(approve_payment_voucher(&pool, &actor, id, maker).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn payment_vouchers_pay(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    id: i64,
+    payable_account: i64,
+    cash_account: i64,
+) -> Result<PaymentVoucher, AppErrorDto> {
+    let actor = state.actor(&token).await?;
+    let pool = state.pool.lock().await.clone();
+    Ok(pay_payment_voucher(&pool, &actor, id, payable_account, cash_account).await?)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -664,6 +711,9 @@ pub fn run() {
             sessions_set_status,
             attendance_record_student,
             payments_record,
+            payment_vouchers_create,
+            payment_vouchers_approve,
+            payment_vouchers_pay,
             finance_accrue_enrollment,
             finance_recognize_revenue,
             vouchers_list_receipts

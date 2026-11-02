@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 
-use crate::error::AppError;
 use crate::AppResult;
 
 #[derive(Debug, Clone, Copy)]
