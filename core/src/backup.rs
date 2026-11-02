@@ -189,3 +189,52 @@ pub fn prune_backups(dest_root: &Path, keep: usize) -> AppResult<usize> {
     }
     Ok(removed)
 }
+
+
+/// Validate a backup destination folder (writable + enough space).
+pub fn validate_destination(dest: &Path) -> AppResult<()> {
+    if !dest.exists() {
+        std::fs::create_dir_all(dest)?;
+    }
+    // write probe
+    let probe = dest.join(".backup_probe");
+    std::fs::write(&probe, b"ok")?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Auto-backup: create a backup if the last one is older than `interval_hours`.
+pub async fn auto_backup_if_due(
+    pool: &SqlitePool,
+    db_path: &Path,
+    dest_root: &Path,
+    interval_hours: i64,
+) -> AppResult<Option<PathBuf>> {
+    validate_destination(dest_root)?;
+    // find latest backup dir
+    let mut latest: Option<std::time::SystemTime> = None;
+    if dest_root.exists() {
+        for e in std::fs::read_dir(dest_root)? {
+            let e = e?;
+            if e.path().is_dir() {
+                if let Ok(m) = e.metadata() {
+                    if let Ok(t) = m.modified() {
+                        if latest.map_or(true, |l| t > l) {
+                            latest = Some(t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let now = std::time::SystemTime::now();
+    let due = match latest {
+        None => true,
+        Some(t) => now.duration_since(t).map_or(true, |d| d.as_secs() >= (interval_hours as u64) * 3600),
+    };
+    if !due {
+        return Ok(None);
+    }
+    let pkg = create_backup(pool, db_path, dest_root).await?;
+    Ok(Some(pkg))
+}

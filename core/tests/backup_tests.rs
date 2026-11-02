@@ -143,3 +143,26 @@ async fn db011_data_dir_relocation() {
     assert_eq!(chk, "ok");
     pool2.close().await;
 }
+
+#[tokio::test]
+async fn bak011_auto_schedule() {
+    let tmp_data = TempDir::new().unwrap();
+    let (pool, dd) = ec_core::config::bootstrap_first_run(Some(tmp_data.path())).await.unwrap();
+    let dest = TempDir::new().unwrap();
+    // first call creates
+    let r1 = ec_core::backup::auto_backup_if_due(&pool, &dd.db_path(), dest.path(), 24).await.unwrap();
+    assert!(r1.is_some());
+    // immediate second call: not due (within interval)
+    let r2 = ec_core::backup::auto_backup_if_due(&pool, &dd.db_path(), dest.path(), 24).await.unwrap();
+    assert!(r2.is_none());
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn bak012_destination_validation() {
+    let tmp = TempDir::new().unwrap();
+    ec_core::backup::validate_destination(tmp.path()).unwrap();
+    // free-space check smoke
+    let dd = ec_core::config::data_dir::DataDir::from_root(tmp.path());
+    assert!(dd.free_space_bytes() > 0);
+}
