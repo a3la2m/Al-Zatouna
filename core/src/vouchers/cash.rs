@@ -99,6 +99,27 @@ pub async fn record_cash_movement(
     Ok(cm)
 }
 
+pub async fn transfer_between_registers(
+    pool: &SqlitePool,
+    actor: &Actor,
+    from_register: i64,
+    to_register: i64,
+    amount_minor: i64,
+) -> AppResult<(i64, i64)> {
+    actor.require("cash.manage")?;
+    if amount_minor <= 0 {
+        return Err(AppError::validation("المبلغ يجب أن يكون أكبر من صفر"));
+    }
+    if from_register == to_register {
+        return Err(AppError::validation("لا يمكن التحويل إلى نفس الصندوق"));
+    }
+    // out from source
+    let out = record_cash_movement(pool, actor, from_register, "transfer_out", "out", amount_minor, "transfer", Some(to_register)).await?;
+    // in to destination
+    let inn = record_cash_movement(pool, actor, to_register, "transfer_in", "in", amount_minor, "transfer", Some(from_register)).await?;
+    Ok((out.id, inn.id))
+}
+
 pub async fn close_register(
     pool: &SqlitePool,
     actor: &Actor,

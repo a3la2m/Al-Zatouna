@@ -68,7 +68,7 @@ async fn db002_migration_chain_idempotent() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(n, 2, "two migrations expected (init + seed)");
+    assert_eq!(n, 3, "three migrations expected (init + seed + teacher_link)");
     // db_meta stamped with max version
     let v: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
         .fetch_one(&pool)

@@ -356,3 +356,13 @@ pub async fn list_rooms(
     let rows = q.fetch_all(pool).await?;
     Ok(rows.iter().map(row_room).collect())
 }
+
+/// Resolve the teacher record linked to a user (FR-4.4 data isolation).
+pub async fn teacher_id_for_user(pool: &SqlitePool, user_id: i64) -> AppResult<Option<i64>> {
+    let r: Option<i64> = sqlx::query_scalar("SELECT teacher_id FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(r)
+}
