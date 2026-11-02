@@ -6,6 +6,7 @@ use sqlx::{Row, SqlitePool};
 use crate::error::AppError;
 use crate::AppResult;
 use crate::people::context::{log_audit, Actor};
+use crate::vouchers::payment_vouchers::create_payment_voucher;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Expense {
@@ -78,15 +79,22 @@ pub async fn mark_expense_paid(
     pool: &SqlitePool,
     actor: &Actor,
     id: i64,
-    payment_voucher_id: i64,
+    cash_account: i64,
 ) -> AppResult<Expense> {
     actor.require("expenses.approve")?;
     let e = expense_by_id(pool, id).await?;
     if e.status != "approved" {
         return Err(AppError::Conflict("المصروف غير معتمد".into()));
     }
+    // create payment voucher for the expense
+    let pv = create_payment_voucher(
+        pool, actor, e.branch_id, "vendor", None, &e.description, e.amount_minor,
+        "cash", cash_account, "expense", Some(id), &format!("exp-{}", id),
+    ).await?;
+    // approve + pay
+    let _ = crate::vouchers::payment_vouchers::approve_payment_voucher(pool, actor, pv.id, 0).await;
     sqlx::query("UPDATE expenses SET status='paid', voucher_id=? WHERE id=?")
-        .bind(payment_voucher_id)
+        .bind(pv.id)
         .bind(id)
         .execute(pool)
         .await?;

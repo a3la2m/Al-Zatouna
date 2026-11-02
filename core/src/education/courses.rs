@@ -226,6 +226,20 @@ pub async fn set_course_status(
     }
     tx.commit().await?;
     let after = course_by_id(pool, id).await?;
+    // change log (FR-6.5)
+    sqlx::query(
+        "INSERT INTO course_change_log (course_id, changed_by, action, before_json, after_json, reason)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(actor.user_id)
+    .bind(new_status)
+    .bind(snapshot(&before).to_string())
+    .bind(snapshot(&after).to_string())
+    .bind(reason)
+    .execute(pool)
+    .await
+    .ok();
     log_audit(pool, actor.user_id, "courses.edit", "courses", Some(id),
         Some(snapshot(&before)), Some(snapshot(&after)), reason).await;
     Ok(after)
