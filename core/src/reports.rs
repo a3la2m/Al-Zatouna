@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use rust_xlsxwriter::Workbook;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SavedReport {
@@ -35,6 +36,31 @@ pub async fn save_report(pool: &SqlitePool, name: &str, definition_json: &str) -
         .execute(pool)
         .await?;
     Ok(res.last_insert_rowid())
+}
+
+
+/// Export a simple report (list of students) to Excel bytes.
+pub async fn export_excel_students(pool: &SqlitePool) -> Result<Vec<u8>, sqlx::Error> {
+    let rows = sqlx::query("SELECT id, full_name, phone, status FROM students ORDER BY id")
+        .fetch_all(pool).await?;
+    use sqlx::Row;
+    let tmp = std::env::temp_dir().join("ec_export.xlsx");
+    let mut wb = Workbook::new(tmp.to_str().unwrap());
+    let ws = wb.add_worksheet();
+    ws.write_string_only(0, 0, "id").ok();
+    ws.write_string_only(0, 1, "full_name").ok();
+    ws.write_string_only(0, 2, "phone").ok();
+    ws.write_string_only(0, 3, "status").ok();
+    for (i, r) in rows.iter().enumerate() {
+        ws.write_number_only((i+1) as u32, 0, r.get::<i64,_>("id") as f64).ok();
+        ws.write_string_only((i+1) as u32, 1, r.get::<String,_>("full_name").as_str()).ok();
+        ws.write_string_only((i+1) as u32, 2, r.get::<String,_>("phone").as_str()).ok();
+        ws.write_string_only((i+1) as u32, 3, r.get::<String,_>("status").as_str()).ok();
+    }
+    wb.close().map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let bytes = std::fs::read(&tmp).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(bytes)
 }
 
 pub async fn list_reports(pool: &SqlitePool) -> Result<Vec<SavedReport>, sqlx::Error> {

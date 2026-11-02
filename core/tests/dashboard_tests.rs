@@ -62,3 +62,13 @@ async fn rpt002_saved_report_builder() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].name, "تقرير 1");
 }
+
+#[tokio::test]
+async fn rpt006_excel_export_valid() {
+    let (pool, _t, _b) = fresh_seeded_pool().await;
+    sqlx::query("INSERT INTO students (branch_id, student_no, full_name) VALUES (1, 1, 'س')").execute(&pool).await.unwrap();
+    let bytes = ec_core::reports::export_excel_students(&pool).await.unwrap();
+    assert!(bytes.len() > 100);
+    // xlsx magic bytes
+    assert_eq!(&bytes[0..2], b"PK");
+}
