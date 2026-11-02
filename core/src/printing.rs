@@ -95,3 +95,33 @@ pub fn page_count(template: &str) -> Result<usize, String> {
     let doc = typst::compile::<typst_layout::PagedDocument>(&world).output.map_err(|e| format!("{:?}", e))?;
     Ok(doc.pages().len())
 }
+
+
+/// Record a print event (template versioning at issuance, FR-12.5).
+pub async fn log_print(
+    pool: &sqlx::SqlitePool,
+    actor_user_id: i64,
+    document_type: &str,
+    document_id: i64,
+    template_code: &str,
+    template_version: &str,
+    purpose: &str,
+    output_path: &str,
+    checksum: &str,
+) -> Result<i64, sqlx::Error> {
+    let res = sqlx::query(
+        "INSERT INTO document_print_log (document_type, document_id, template_code, template_version, printed_by, purpose, output_path, checksum)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(document_type)
+    .bind(document_id)
+    .bind(template_code)
+    .bind(template_version)
+    .bind(actor_user_id)
+    .bind(purpose)
+    .bind(output_path)
+    .bind(checksum)
+    .execute(pool)
+    .await?;
+    Ok(res.last_insert_rowid())
+}
