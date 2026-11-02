@@ -11,6 +11,7 @@
 
 pub mod common;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod database;
 pub mod error;
