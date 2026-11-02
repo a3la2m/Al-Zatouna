@@ -57,13 +57,12 @@ pub async fn link_guardian_to_student(
 ) -> AppResult<()> {
     actor.require("students.edit")?;
     sqlx::query(
-        "INSERT INTO student_guardians (student_id, guardian_id, relation, is_primary)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (student_id, guardian_id) DO UPDATE SET relation=excluded.relation, is_primary=excluded.is_primary",
+        "INSERT INTO student_guardians (student_id, guardian_id, is_primary)
+         VALUES (?, ?, ?)
+         ON CONFLICT (student_id, guardian_id) DO UPDATE SET is_primary=excluded.is_primary",
     )
     .bind(student_id)
     .bind(guardian_id)
-    .bind(relation)
     .bind(is_primary as i64)
     .execute(pool)
     .await?;

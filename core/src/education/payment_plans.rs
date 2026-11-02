@@ -35,7 +35,7 @@ pub async fn create_payment_plan(
     first_due_date: &str,
     interval_days: i64,
 ) -> AppResult<PaymentPlan> {
-    actor.require("enrollments.create")?;
+    actor.require("courses.edit")?;
     if total_minor < 0 || installment_count < 1 {
         return Err(AppError::validation("بيانات غير صالحة"));
     }
