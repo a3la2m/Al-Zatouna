@@ -83,15 +83,21 @@
   class="fixed inset-y-0 right-0 z-30 flex flex-col text-white transition-[width] duration-200"
   style="width:{collapsed ? 68 : 264}px; background: linear-gradient(180deg, #24370f 0%, #1a2809 100%); border-inline-start: 1px solid rgba(255,255,255,.07);"
 >
-  <!-- brand -->
+  <!-- brand / notifications trigger (logo) -->
   <div class="flex items-center gap-2.5 px-4 py-4" style="border-bottom:1px solid rgba(255,255,255,.08)">
-    <div class="flex-none rounded-xl p-0.5" style="background:rgba(255,255,255,.08)">
-      <Logo size={30} variant="icon" light />
-    </div>
+    {#if $sessionUser}
+      <NotificationBell variant="logo" />
+    {:else}
+      <div class="flex-none rounded-xl p-0.5" style="background:rgba(255,255,255,.08)">
+        <Logo size={30} variant="icon" light />
+      </div>
+    {/if}
     {#if !collapsed}
       <div class="min-w-0 flex-1">
         <div class="truncate text-[16px] font-extrabold leading-tight" style="color:#eaf2d8">الزيتونة</div>
-        <div class="truncate text-[11px] text-white/55">نظام إدارة المركز التعليمي</div>
+        <div class="truncate text-[11px] text-white/55">
+          {$sessionUser ? 'اضغط الشعار لعرض الإشعارات' : 'نظام إدارة المركز التعليمي'}
+        </div>
       </div>
     {/if}
     <button
@@ -148,9 +154,6 @@
 
   <!-- user + logout -->
   <div class="px-2 py-3" style="border-top:1px solid rgba(255,255,255,.08)">
-    {#if $sessionUser}
-      <div class="mb-2 flex justify-center"><NotificationBell /></div>
-    {/if}
     {#if !collapsed && $sessionUser}
       <div class="mb-2 flex items-center gap-2.5 px-2">
         <div

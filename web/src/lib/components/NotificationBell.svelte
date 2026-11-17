@@ -5,6 +5,9 @@
   import { notificationsApi, type AppNotification } from '$lib/api/app';
   import { goto } from '$app/navigation';
   import { ago } from '$lib/format';
+  import Logo from '$lib/components/Logo.svelte';
+
+  let { variant = 'bell' }: { variant?: 'bell' | 'logo' } = $props();
 
   let open = $state(false);
   let items = $state<AppNotification[]>([]);
@@ -68,19 +71,23 @@
 <div class="relative">
   <button
     type="button"
-    class="bell-btn"
+    class={variant === 'logo' ? 'logo-btn' : 'bell-btn'}
     aria-label="الإشعارات"
-    title="الإشعارات"
+    title={unseen > 0 ? `الإشعارات (${unseen} جديد)` : 'الإشعارات'}
     onclick={toggle}
   >
-    <span aria-hidden="true" class="text-[17px]">🔔</span>
+    {#if variant === 'logo'}
+      <Logo size={30} variant="icon" light />
+    {:else}
+      <span aria-hidden="true" class="text-[17px]">🔔</span>
+    {/if}
     {#if unseen > 0}
-      <span class="bell-badge">{unseen > 9 ? '9+' : unseen}</span>
+      <span class={variant === 'logo' ? 'logo-badge' : 'bell-badge'}>{unseen > 9 ? '9+' : unseen}</span>
     {/if}
   </button>
 
   {#if open}
-    <div class="bell-panel" role="dialog" aria-label="الإشعارات">
+    <div class="bell-panel {variant === 'logo' ? 'panel-below' : 'panel-above'}" role="dialog" aria-label="الإشعارات">
       <div class="flex items-center justify-between border-b px-4 py-3" style="border-color:var(--ec-border)">
         <span class="font-bold text-[14px]">الإشعارات</span>
         <span class="flex items-center gap-3">
@@ -151,10 +158,47 @@
     line-height: 16px;
     text-align: center;
   }
+
+  /* logo-as-notification-button (sidebar header) */
+  .logo-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
+  }
+  .logo-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 0 0 3px rgba(130, 191, 75, 0.18);
+  }
+  .logo-btn:active { transform: scale(0.96); }
+  .logo-badge {
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--ec-red);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    border: 2px solid #24370f;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25);
+  }
+
   .bell-panel {
     position: absolute;
-    bottom: 42px;
-    right: 0;
     width: 340px;
     z-index: 100;
     border-radius: 12px;
@@ -163,4 +207,6 @@
     box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.35);
     overflow: hidden;
   }
+  .panel-above { bottom: 42px; right: 0; }
+  .panel-below { top: calc(100% + 10px); right: 0; }
 </style>
