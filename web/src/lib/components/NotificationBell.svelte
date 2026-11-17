@@ -13,6 +13,16 @@
   let items = $state<AppNotification[]>([]);
   let unseen = $state(0);
   let timer: ReturnType<typeof setInterval>;
+  let root: HTMLDivElement | undefined = $state();
+
+  function onDocPointerDown(e: PointerEvent) {
+    if (!open || !root) return;
+    if (!root.contains(e.target as Node)) open = false;
+  }
+
+  function onDocKeydown(e: KeyboardEvent) {
+    if (open && e.key === 'Escape') open = false;
+  }
 
   async function refresh() {
     const token = get(sessionToken);
@@ -29,8 +39,14 @@
   onMount(() => {
     refresh();
     timer = setInterval(refresh, 15000); // poll every 15s
+    document.addEventListener('pointerdown', onDocPointerDown);
+    document.addEventListener('keydown', onDocKeydown);
   });
-  onDestroy(() => clearInterval(timer));
+  onDestroy(() => {
+    clearInterval(timer);
+    document.removeEventListener('pointerdown', onDocPointerDown);
+    document.removeEventListener('keydown', onDocKeydown);
+  });
 
   async function toggle() {
     open = !open;
@@ -68,7 +84,7 @@
   }
 </script>
 
-<div class="relative">
+<div class="relative" bind:this={root}>
   <button
     type="button"
     class={variant === 'logo' ? 'logo-btn' : 'bell-btn'}
