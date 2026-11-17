@@ -52,7 +52,7 @@ pub async fn link_guardian_to_student(
     actor: &Actor,
     student_id: i64,
     guardian_id: i64,
-    relation: &str,
+    _relation: &str,
     is_primary: bool,
 ) -> AppResult<()> {
     actor.require("students.edit")?;
@@ -83,7 +83,7 @@ pub async fn apply_credit_to_enrollment(
     }
     // check credit balance
     let balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount_minor), 0) FROM student_credit_ledger WHERE student_id = ?",
+        "SELECT COALESCE(SUM(credit_minor), 0) FROM student_credit_ledger WHERE student_id = ?",
     )
     .bind(student_id)
     .fetch_one(pool)
@@ -101,8 +101,8 @@ pub async fn apply_credit_to_enrollment(
     .await?;
     // ledger entry: credit used
     sqlx::query(
-        "INSERT INTO student_credit_ledger (student_id, enrollment_id, entry_type, amount_minor, reason, created_by)
-         VALUES (?, ?, 'applied', ?, 'apply to enrollment', ?)",
+        "INSERT INTO student_credit_ledger (student_id, ref_type, ref_id, credit_minor, occurred_at, note, created_by)
+         VALUES (?, 'adjustment', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'apply to enrollment', ?)",
     )
     .bind(student_id)
     .bind(enrollment_id)
@@ -111,5 +111,34 @@ pub async fn apply_credit_to_enrollment(
     .execute(pool)
     .await?;
     log_audit(pool, actor.user_id, "students.edit", "enrollments", Some(enrollment_id), None, None, "credit applied").await;
+    Ok(())
+}
+
+/// Refund a paid amount into student credit (credit ledger positive).
+pub async fn refund_to_credit(
+    pool: &SqlitePool,
+    actor: &Actor,
+    student_id: i64,
+    amount_minor: i64,
+    reason: &str,
+) -> AppResult<()> {
+    actor.require("students.edit")?;
+    if amount_minor <= 0 {
+        return Err(AppError::validation("المبلغ يجب أن يكون أكبر من صفر"));
+    }
+    if reason.trim().is_empty() {
+        return Err(AppError::validation("السبب مطلوب"));
+    }
+    sqlx::query(
+        "INSERT INTO student_credit_ledger (student_id, ref_type, ref_id, credit_minor, occurred_at, note, created_by)
+         VALUES (?, 'refund', 0, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?)",
+    )
+    .bind(student_id)
+    .bind(amount_minor)
+    .bind(reason)
+    .bind(actor.user_id)
+    .execute(pool)
+    .await?;
+    log_audit(pool, actor.user_id, "students.edit", "student_credit_ledger", None, None, None, "credit refunded").await;
     Ok(())
 }

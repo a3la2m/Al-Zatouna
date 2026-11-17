@@ -264,3 +264,90 @@ async fn auth006_admin_password_reset() {
     assert!(err.to_string().contains("صلاحية"), "err: {err}");
     let _ = clerk;
 }
+
+/// auth015: on a fresh install (zero users) login must say so, so the UI can
+/// switch to first-run setup — not a generic "wrong credentials" dead end.
+#[tokio::test]
+async fn auth015_login_on_empty_install_offers_setup() {
+    let (pool, _t, _b) = fresh_seeded_pool().await;
+    let svc = AuthService::new(pool);
+    let err = svc.login("admin", "Admin@12345").await.unwrap_err();
+    let msg = match err {
+        ec_core::AppError::PermissionDenied(m) => m,
+        other => panic!("expected PermissionDenied, got {other:?}"),
+    };
+    assert!(msg.contains("لم يُهيأ"), "UI keys off this phrase, got: {msg}");
+
+    // once the first admin exists the same call returns the generic message
+    svc.create_first_admin("admin", "المدير العام", "Sup3r-Secret!")
+        .await
+        .unwrap();
+    let err2 = svc.login("admin", "wrong").await.unwrap_err();
+    let msg2 = match err2 {
+        ec_core::AppError::PermissionDenied(m) => m,
+        other => panic!("expected PermissionDenied, got {other:?}"),
+    };
+    assert!(msg2.contains("غير صحيحة"), "got: {msg2}");
+}
+
+// Phase 19: persistent "remember me" sessions + recovery codes.
+#[tokio::test]
+async fn auth017_remember_session_survives_restart() {
+    let (pool, _t, _b) = fresh_seeded_pool().await;
+    let svc = AuthService::new(pool.clone());
+    let _ = svc.create_first_admin("rem", "Remember", "Passw0rd!x").await.unwrap();
+    let res = svc.login("rem", "Passw0rd!x").await.unwrap();
+    svc.remember_token(&res.token, res.user.user_id).await.unwrap();
+    assert!(svc.session_user(&res.token).await.is_ok());
+
+    // simulate an app restart: brand-new AuthService over the same DB, empty memory
+    let svc2 = AuthService::new(pool);
+    let su = svc2.session_user(&res.token).await
+        .expect("persistent token must rehydrate from SQLite");
+    assert_eq!(su.username, "rem");
+
+    // logout removes the persistent row, so a fresh service can't restore it
+    svc2.logout(&res.token).await.unwrap();
+    let svc3 = AuthService::new(svc2.pool.clone());
+    assert!(svc3.session_user(&res.token).await.is_err());
+}
+
+#[tokio::test]
+async fn auth018_recovery_code_resets_password() {
+    let (pool, _t, _b) = fresh_seeded_pool().await;
+    let svc = AuthService::new(pool.clone());
+    let uid = svc.create_first_admin("forgot", "Forgot", "OldPassw0rd!").await.unwrap();
+    let login = svc.login("forgot", "OldPassw0rd!").await.unwrap();
+
+    let codes = svc.generate_recovery_codes(&login.token, uid, 3).await.unwrap();
+    assert_eq!(codes.len(), 3);
+    assert!(codes[0].starts_with("ZYT-"));
+
+    // only hashes stored
+    let hashes: Vec<String> = sqlx::query_scalar("SELECT code_hash FROM password_recovery_codes WHERE user_id=?")
+        .bind(uid).fetch_all(&pool).await.unwrap();
+    assert!(hashes.iter().all(|h| !h.contains("ZYT-")));
+
+    // recover with one code
+    svc.recover_password("forgot", &codes[0], "NewPassw0rd!").await.unwrap();
+    // old password no longer works, new one does
+    assert!(svc.login("forgot", "OldPassw0rd!").await.is_err());
+    let after = svc.login("forgot", "NewPassw0rd!").await.unwrap();
+    assert!(after.must_change_password, "recovery forces password change");
+
+    // code is single-use
+    assert!(svc.recover_password("forgot", &codes[0], "Another1!").await.is_err());
+}
+
+#[test]
+fn auth_timing_argon2() {
+    let t = std::time::Instant::now();
+    let h = ec_core::auth::password::hash_password("Admin@12345").unwrap();
+    let e1 = t.elapsed();
+    let t2 = std::time::Instant::now();
+    assert!(ec_core::auth::password::verify_password("Admin@12345", &h));
+    let e2 = t2.elapsed();
+    println!("ARGON2 fast hash={:?} verify={:?}", e1, e2);
+    assert!(!ec_core::auth::password::needs_rehash(&h));
+    assert!(e2.as_millis() < 2000, "verify must be well under 2s, got {:?}", e2);
+}

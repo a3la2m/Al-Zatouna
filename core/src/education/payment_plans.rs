@@ -1,7 +1,7 @@
 //! Payment plans & installments (Phase 12.1).
 
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::AppResult;

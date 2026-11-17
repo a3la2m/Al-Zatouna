@@ -112,3 +112,19 @@ async fn cfg002_data_dir_change_roundtrip() {
     pool2.close().await;
     let _ = dd;
 }
+
+/// sec008: teacher scope enforced.
+#[tokio::test]
+async fn sec008_teacher_scope_enforced() {
+    let (pool, _t, _b) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    // admin has no linked teacher -> None
+    let scope = ec_core::people::teachers::scope_for_teacher(&pool, &admin).await.unwrap();
+    assert!(scope.is_none());
+    // link user to a teacher
+    sqlx::query("INSERT INTO teachers (branch_id, teacher_no, full_name) VALUES (1, 77, 'م')").execute(&pool).await.unwrap();
+    let tid: i64 = sqlx::query_scalar("SELECT id FROM teachers WHERE teacher_no=77").fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE users SET teacher_id = ? WHERE id = ?").bind(tid).bind(admin.user_id).execute(&pool).await.unwrap();
+    let scope2 = ec_core::people::teachers::scope_for_teacher(&pool, &admin).await.unwrap();
+    assert_eq!(scope2, Some(tid));
+}

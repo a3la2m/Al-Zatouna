@@ -3,7 +3,6 @@
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
-use crate::common::seq::{allocate_next_no, seed_sequence, SequenceKind};
 use crate::error::AppError;
 use crate::AppResult;
 use crate::people::context::Actor;
@@ -296,4 +295,32 @@ pub async fn ledger_balanced(pool: &SqlitePool) -> AppResult<bool> {
     .fetch_one(pool)
     .await?;
     Ok(td == tc)
+}
+
+/// Postable accounts (id + code + name + kind) — dropdowns for vouchers,
+/// closings and the chart of accounts screen.
+#[derive(Debug, Serialize, Clone)]
+pub struct AccountOption {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    pub kind: String,
+}
+
+pub async fn list_accounts(pool: &SqlitePool) -> Result<Vec<AccountOption>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, code, name, kind FROM accounts
+         WHERE is_postable = 1 AND is_active = 1 ORDER BY code",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| AccountOption {
+            id: r.get("id"),
+            code: r.get("code"),
+            name: r.get("name"),
+            kind: r.get("kind"),
+        })
+        .collect())
 }

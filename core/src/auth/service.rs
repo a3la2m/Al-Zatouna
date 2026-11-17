@@ -23,6 +23,8 @@ pub const FAILED_ATTEMPTS_LIMIT: i64 = 5;
 pub const LOCKOUT_MINUTES: i64 = 5;
 /// Auto-inactivity lock default: 20 minutes (configurable later).
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// How long a persistent "remember me" session stays valid (days).
+pub const REMEMBER_DAYS: i64 = 30;
 
 /// A live, verified session.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -145,6 +147,19 @@ fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
 }
 
+/// SHA-256 of a recovery code, hex-encoded (only hashes are stored).
+fn code_hash(code: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(code.as_bytes());
+    const H: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for &b in digest.iter() {
+        out.push(H[(b >> 4) as usize] as char);
+        out.push(H[(b & 15) as usize] as char);
+    }
+    out
+}
+
 impl AuthService {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool, sessions: Arc::new(SessionStore::new()) }
@@ -216,6 +231,17 @@ impl AuthService {
         .await?;
 
         let Some((uid, uname, _full, phash, is_active, failed, locked_until)) = row else {
+            // No users at all ⇒ this is a fresh install: tell the login screen
+            // to switch to first-run setup instead of a generic "wrong password"
+            // (the UI keys off the phrase «لم يُهيأ»).
+            let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+                .fetch_one(&self.pool)
+                .await?;
+            if user_count == 0 {
+                return Err(AppError::PermissionDenied(
+                    "النظام لم يُهيأ بعد — أنشئ حساب المدير الأول".into(),
+                ));
+            }
             self.audit_failure(None, username).await;
             return Err(AppError::PermissionDenied(
                 "اسم المستخدم أو كلمة المرور غير صحيحة".into(),
@@ -259,6 +285,15 @@ impl AuthService {
             return Err(AppError::PermissionDenied(
                 "اسم المستخدم أو كلمة المرور غير صحيحة".into(),
             ));
+        }
+
+        // Lazy-upgrade old/slow hashes: rehash with the current fast parameters
+        // while we still hold the plaintext during this successful login.
+        if password::needs_rehash(&phash) {
+            if let Ok(new_hash) = password::hash_password(pass) {
+                sqlx::query("UPDATE users SET password_hash=? WHERE id=?")
+                    .bind(new_hash).bind(uid).execute(&self.pool).await.ok();
+            }
         }
 
         // success — reset counters + stamp last login
@@ -313,8 +348,9 @@ impl AuthService {
 
     /// End a session explicitly (logout event is durable).
     pub async fn logout(&self, token: &str) -> AppResult<()> {
-        let user = self.sessions.verify(token).await;
+        let user = self.sessions.verify(token).await.or_else(|| None);
         self.sessions.remove(token).await;
+        sqlx::query("DELETE FROM auth_sessions WHERE token = ?").bind(token).execute(&self.pool).await.ok();
         if let Some(u) = user {
             audit::log(
                 &self.pool,
@@ -336,11 +372,138 @@ impl AuthService {
     }
 
     /// Authoritative lookup used by every protected command via the shell.
+    /// First checks the in-memory sliding session; on a miss it checks the
+    /// durable persistent ("remember me") session table and rehydrates memory.
     pub async fn session_user(&self, token: &str) -> AppResult<SessionUser> {
-        self.sessions
-            .verify(token)
-            .await
-            .ok_or_else(|| AppError::PermissionDenied("الجلسة غير سارية — أعد تسجيل الدخول".into()))
+        if let Some(u) = self.sessions.verify(token).await {
+            return Ok(u);
+        }
+        if let Some(u) = self.rehydrate_persistent(token).await? {
+            return Ok(u);
+        }
+        Err(AppError::PermissionDenied("الجلسة غير سارية — أعد تسجيل الدخول".into()))
+    }
+
+    /// Restore a persistent session from SQLite into the in-memory store.
+    async fn rehydrate_persistent(&self, token: &str) -> AppResult<Option<SessionUser>> {
+        let row: Option<(i64, String, String)> = sqlx::query_as(
+            "SELECT user_id, expires_at, last_activity FROM auth_sessions WHERE token = ?",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((uid, expires, _last)) = row else { return Ok(None); };
+        // expired? remove it
+        let valid = parse_iso(&expires)
+            .map(|t| t > Utc::now())
+            .unwrap_or(false);
+        if !valid {
+            sqlx::query("DELETE FROM auth_sessions WHERE token = ?").bind(token).execute(&self.pool).await?;
+            return Ok(None);
+        }
+        let active: i64 = sqlx::query_scalar("SELECT is_active FROM users WHERE id = ?")
+            .bind(uid).fetch_one(&self.pool).await?;
+        if active != 1 {
+            sqlx::query("DELETE FROM auth_sessions WHERE token = ?").bind(token).execute(&self.pool).await?;
+            return Ok(None);
+        }
+        let perms = crate::auth::permissions::load_for_user(&self.pool, uid).await?;
+        let (username, full_name): (String, String) =
+            sqlx::query_as("SELECT username, full_name FROM users WHERE id = ?")
+                .bind(uid).fetch_one(&self.pool).await?;
+        let su = SessionUser {
+            user_id: uid, username, full_name, permissions: perms,
+            last_activity: Instant::now(),
+        };
+        self.sessions.put(token.to_string(), su.clone()).await;
+        // slide the durable expiry too
+        sqlx::query("UPDATE auth_sessions SET last_activity = ? WHERE token = ?")
+            .bind(now_iso()).bind(token).execute(&self.pool).await.ok();
+        Ok(Some(su))
+    }
+
+    /// Persist the current token so it survives an app restart ("remember me").
+    pub async fn remember_token(&self, token: &str, user_id: i64) -> AppResult<()> {
+        let expires = minutes_from_now_iso(REMEMBER_DAYS * 24 * 60);
+        sqlx::query(
+            "INSERT INTO auth_sessions (token, user_id, expires_at, remember) VALUES (?, ?, ?, 1)
+             ON CONFLICT (token) DO UPDATE SET expires_at=excluded.expires_at, last_activity=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+        )
+        .bind(token).bind(user_id).bind(expires)
+        .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Generate one-time recovery codes for a user (admin or self only).
+    /// Returns the plain codes once — only SHA-256 hashes are stored.
+    pub async fn generate_recovery_codes(
+        &self, token: &str, target_user_id: i64, count: i64,
+    ) -> AppResult<Vec<String>> {
+        let su = self.session_user(token).await?;
+        if su.user_id != target_user_id {
+            self.require(token, "users.manage").await?;
+        }
+        let count = count.clamp(1, 12);
+        let _: String = sqlx::query_scalar("SELECT username FROM users WHERE id=?")
+            .bind(target_user_id).fetch_optional(&self.pool).await?
+            .ok_or_else(|| AppError::NotFound("المستخدم غير موجود".into()))?;
+        // invalidate any previous unused codes
+        sqlx::query("DELETE FROM password_recovery_codes WHERE user_id=? AND used_at IS NULL")
+            .bind(target_user_id).execute(&self.pool).await?;
+        let mut codes = Vec::new();
+        for _ in 0..count {
+            let mut raw = [0u8; 12];
+            rand::thread_rng().fill_bytes(&mut raw);
+            const A: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            let mut code = String::from("ZYT-");
+            for (i, b) in raw.iter().enumerate() {
+                if i == 4 || i == 8 { code.push('-'); }
+                code.push(A[(*b as usize) % A.len()] as char);
+            }
+            sqlx::query("INSERT INTO password_recovery_codes (user_id, code_hash, label) VALUES (?, ?, ?)")
+                .bind(target_user_id).bind(code_hash(&code)).bind("استرداد")
+                .execute(&self.pool).await?;
+            codes.push(code);
+        }
+        audit::log(&self.pool, audit::AuditEvent {
+            user_id: Some(su.user_id), action: "recovery_codes_generated",
+            entity_type: "users", entity_id: Some(target_user_id),
+            old: None, new: None, reason: "", ctx: None,
+        }).await.ok();
+        Ok(codes)
+    }
+
+    /// Reset a password using a one-time recovery code (self-service, no login).
+    pub async fn recover_password(
+        &self, username: &str, code: &str, new_password: &str,
+    ) -> AppResult<()> {
+        let uid: i64 = sqlx::query_scalar(
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+        )
+        .bind(username).fetch_optional(&self.pool).await?
+        .ok_or_else(|| AppError::PermissionDenied("اسم المستخدم أو رمز الاسترداد غير صحيح".into()))?;
+        let row: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM password_recovery_codes
+             WHERE user_id=? AND code_hash=? AND used_at IS NULL ORDER BY id LIMIT 1",
+        )
+        .bind(uid).bind(code_hash(code.trim().to_uppercase().as_str()))
+        .fetch_optional(&self.pool).await?;
+        let Some(cid) = row else {
+            return Err(AppError::PermissionDenied("اسم المستخدم أو رمز الاسترداد غير صحيح".into()));
+        };
+        let uname: String = sqlx::query_scalar("SELECT username FROM users WHERE id=?")
+            .bind(uid).fetch_one(&self.pool).await?;
+        set_password(&self.pool, uid, new_password, &uname, true).await?;
+        sqlx::query("UPDATE password_recovery_codes SET used_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?")
+            .bind(cid).execute(&self.pool).await?;
+        // invalidate persistent sessions on password recovery
+        sqlx::query("DELETE FROM auth_sessions WHERE user_id=?").bind(uid).execute(&self.pool).await.ok();
+        audit::log(&self.pool, audit::AuditEvent {
+            user_id: Some(uid), action: "password_recovered",
+            entity_type: "users", entity_id: Some(uid),
+            old: None, new: None, reason: "رمز استرداد", ctx: None,
+        }).await.ok();
+        Ok(())
     }
 
     /// Convenience gate for commands: verify the session AND permission.
@@ -587,4 +750,114 @@ fn validate_new_user(username: &str, _full_name: &str, pass: &str) -> AppResult<
         ));
     }
     password::validate_password(pass, username)
+}
+
+// ---------- user management (Phase 16: settings screen) ----------
+
+/// One row of the user-management screen.
+#[derive(Debug, Serialize, Clone)]
+pub struct UserSummary {
+    pub id: i64,
+    pub username: String,
+    pub full_name: String,
+    pub is_active: bool,
+    pub must_change_password: bool,
+    pub last_login_at: Option<String>,
+    pub created_at: String,
+    pub roles: Vec<String>,
+}
+
+impl AuthService {
+    /// Every user with its roles. Requires `users.manage`.
+    pub async fn list_users(&self, token: &str) -> AppResult<Vec<UserSummary>> {
+        use sqlx::Row;
+        self.require(token, "users.manage").await?;
+        let rows = sqlx::query(
+            "SELECT id, username, full_name, is_active, must_change_password,
+                    COALESCE(last_login_at, '') AS last_login_at, created_at
+             FROM users ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let id: i64 = r.get("id");
+            let roles: Vec<String> = sqlx::query_scalar(
+                "SELECT code FROM roles
+                 WHERE id IN (SELECT role_id FROM user_roles WHERE user_id = ?)
+                 ORDER BY code",
+            )
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await?;
+            let last: String = r.get("last_login_at");
+            out.push(UserSummary {
+                id,
+                username: r.get("username"),
+                full_name: r.get("full_name"),
+                is_active: r.get::<i64, _>("is_active") != 0,
+                must_change_password: r.get::<i64, _>("must_change_password") != 0,
+                last_login_at: if last.is_empty() { None } else { Some(last) },
+                created_at: r.get("created_at"),
+                roles,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Create a user from the settings screen. Requires `users.manage`.
+    pub async fn create_user_admin(
+        &self,
+        token: &str,
+        username: &str,
+        full_name: &str,
+        pass: &str,
+        roles: &[&str],
+    ) -> AppResult<i64> {
+        let su = self.require(token, "users.manage").await?;
+        if roles.is_empty() {
+            return Err(AppError::validation("اختر دوراً واحداً على الأقل"));
+        }
+        create_user(&self.pool, su.user_id, username, full_name, pass, roles).await
+    }
+
+    /// Re-enable a disabled account. Requires `users.manage`.
+    pub async fn enable_user(&self, token: &str, target_user_id: i64) -> AppResult<()> {
+        let su = self.require(token, "users.manage").await?;
+        let res = sqlx::query(
+            "UPDATE users SET is_active = 1, failed_attempts = 0, locked_until = NULL,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE id = ?",
+        )
+        .bind(target_user_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(AppError::NotFound("المستخدم غير موجود".into()));
+        }
+        audit::log(
+            &self.pool,
+            audit::AuditEvent {
+                user_id: Some(su.user_id),
+                action: "user_enabled",
+                entity_type: "users",
+                entity_id: Some(target_user_id),
+                old: None,
+                new: None,
+                reason: "",
+                ctx: None,
+            },
+        )
+        .await
+        .ok();
+        Ok(())
+    }
+
+    /// Available role codes for the "add user" form.
+    pub async fn list_roles(&self, token: &str) -> AppResult<Vec<String>> {
+        self.require(token, "users.manage").await?;
+        Ok(sqlx::query_scalar("SELECT code FROM roles ORDER BY code")
+            .fetch_all(&self.pool)
+            .await?)
+    }
 }

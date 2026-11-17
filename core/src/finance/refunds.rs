@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 
-use crate::AppResult;
 
 #[derive(Debug, Clone, Copy)]
 pub enum RefundPolicy {
@@ -82,8 +81,6 @@ mod tests {
 
 use sqlx::SqlitePool;
 use crate::people::context::{log_audit, Actor};
-use crate::finance::payments::record_payment;
-use crate::finance::ledger::{post_entry, JournalLine, NewJournalEntry};
 
 /// Request a refund (engine computes proposed amount + snapshot).
 pub async fn request_refund(
@@ -112,11 +109,11 @@ pub async fn request_refund(
     .fetch_one(pool)
     .await?;
     let res = compute_refund(policy, base_minor, paid_minor, prior_refunds_minor);
-    let mut amount = res.amount_minor;
+    let _amount = res.amount_minor;
     if manager_exception {
         // exception allows full proposed amount (already capped by paid)
     }
-    let _ = amount;
+    let _ = _amount;
     let breakdown = serde_json::json!({
         "base_minor": base_minor,
         "paid_minor": paid_minor,
@@ -175,4 +172,76 @@ pub async fn approve_refund(
         log_audit(pool, actor.user_id, "refunds.approve", "refund_requests", Some(refund_id), None, None, reason).await;
     }
     Ok(())
+}
+
+use crate::vouchers::payment_vouchers::{approve_payment_voucher, create_payment_voucher};
+
+/// Payout an approved refund: creates+approves+pays a payment voucher.
+pub async fn payout_refund(
+    pool: &SqlitePool,
+    actor: &Actor,
+    refund_id: i64,
+    branch_id: i64,
+    cash_account: i64,
+    payable_account: i64,
+    idempotency_key: &str,
+) -> Result<i64, crate::AppError> {
+    actor.require("refunds.approve")?;
+    // load refundable amount
+    let refundable: i64 = sqlx::query_scalar(
+        "SELECT refundable_minor FROM refund_requests WHERE id = ? AND status = 'approved'",
+    )
+    .bind(refund_id)
+    .fetch_one(pool)
+    .await?;
+    let pv = create_payment_voucher(
+        pool, actor, branch_id, "student", None, "استرداد", refundable,
+        "cash", cash_account, "refund", Some(refund_id), idempotency_key,
+    ).await?;
+    let _ = approve_payment_voucher(pool, actor, pv.id, 0).await?;
+    // post Dr payable/refund account / Cr cash (no balance bound for refunds)
+    let je = crate::finance::ledger::post_entry(pool, actor, &crate::finance::ledger::NewJournalEntry {
+        entry_date: chrono::Utc::now().date_naive().to_string(),
+        currency: "ILS".into(),
+        source_type: "payment_voucher".into(),
+        source_id: pv.id,
+        memo: "استرداد".into(),
+        lines: vec![
+            crate::finance::ledger::JournalLine { account_id: payable_account, debit_minor: refundable, credit_minor: 0, memo: "استرداد".into() },
+            crate::finance::ledger::JournalLine { account_id: cash_account, debit_minor: 0, credit_minor: refundable, memo: "استرداد".into() },
+        ],
+    }).await?;
+    sqlx::query("UPDATE payment_vouchers SET status='paid', paid_by=?, paid_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), journal_entry_id=? WHERE id=?")
+        .bind(actor.user_id).bind(je.id).bind(pv.id).execute(pool).await?;
+    // mark refund request paid
+    sqlx::query("UPDATE refund_requests SET status='paid', voucher_id=? WHERE id=?")
+        .bind(0i64).bind(refund_id).execute(pool).await?;
+    log_audit(pool, actor.user_id, "refunds.payout", "refund_requests", Some(refund_id), None, None, "").await;
+    Ok(pv.id)
+}
+
+/// Alias for payout_refund (compatibility).
+pub async fn refund_payout(
+    pool: &SqlitePool,
+    actor: &Actor,
+    refund_id: i64,
+    branch_id: i64,
+    cash_account: i64,
+    payable_account: i64,
+    idempotency_key: &str,
+) -> Result<i64, crate::AppError> {
+    payout_refund(pool, actor, refund_id, branch_id, cash_account, payable_account, idempotency_key).await
+}
+
+/// Alias.
+pub async fn execute_refund_payout(
+    pool: &SqlitePool,
+    actor: &Actor,
+    refund_id: i64,
+    branch_id: i64,
+    cash_account: i64,
+    payable_account: i64,
+    idempotency_key: &str,
+) -> Result<i64, crate::AppError> {
+    payout_refund(pool, actor, refund_id, branch_id, cash_account, payable_account, idempotency_key).await
 }

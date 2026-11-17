@@ -1,63 +1,160 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { sessionToken } from '$lib/stores/app';
   import { peopleApi, type Subject } from '$lib/api/people';
-  import { get } from 'svelte/store';
   import { invoke } from '$lib/api';
+  import { toast } from '$lib/toasts';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import Card from '$lib/components/Card.svelte';
+  import Button from '$lib/components/Button.svelte';
+  import Alert from '$lib/components/Alert.svelte';
+  import Modal from '$lib/components/Modal.svelte';
+  import Field from '$lib/components/Field.svelte';
+  import Badge from '$lib/components/Badge.svelte';
+  import DataTable from '$lib/components/DataTable.svelte';
 
   let items = $state<Subject[]>([]);
-  let loading = $state(false);
+  let loading = $state(true);
   let error = $state('');
+
   let showForm = $state(false);
   let code = $state('');
   let name = $state('');
+  let description = $state('');
+  let saving = $state(false);
+  let formError = $state('');
+
+  let search = $state('');
+
+  const filtered = $derived(
+    search.trim() === ''
+      ? items
+      : items.filter(
+          (s) =>
+            s.name.includes(search.trim()) ||
+            s.code.toLowerCase().includes(search.trim().toLowerCase())
+        )
+  );
 
   async function load() {
     const token = get(sessionToken);
-    if (!token) return;
-    loading = true; error = '';
-    try { items = await peopleApi.subjects.list(token, false); }
-    catch (e) { console.error(e); error = (e as any)?.message || 'خطأ'; }
-    finally { loading = false; }
+    if (!token) {
+      loading = false;
+      return;
+    }
+    loading = true;
+    error = '';
+    try {
+      items = await peopleApi.subjects.list(token, false);
+    } catch (e) {
+      error = (e as Error)?.message ?? 'تعذّر تحميل المواد';
+    } finally {
+      loading = false;
+    }
   }
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
     const token = get(sessionToken);
     if (!token) return;
-    error = '';
+    formError = '';
+    saving = true;
     try {
-      await invoke('subjects_create', { token, code, name, description: '' });
-      code = ''; name = ''; showForm = false; await load();
-    } catch (e) { console.error(e); error = (e as any)?.message || 'خطأ'; }
+      await invoke('subjects_create', {
+        token,
+        code: code.trim(),
+        name: name.trim(),
+        description: description.trim()
+      });
+      toast.ok(`تمت إضافة مادة «${name.trim()}»`);
+      showForm = false;
+      code = '';
+      name = '';
+      description = '';
+      await load();
+    } catch (err) {
+      formError = (err as Error)?.message ?? 'تعذّر إضافة المادة';
+    } finally {
+      saving = false;
+    }
   }
 
   onMount(load);
 </script>
 
-<section>
-  <div class="mb-4 flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-[var(--ec-navy)]">المواد</h1>
-    <button class="rounded-md bg-[var(--ec-blue)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90" onclick={() => (showForm = !showForm)}>
-      {showForm ? 'إلغاء' : 'إضافة مادة'}
-    </button>
-  </div>
-  {#if error}<p class="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>{/if}
-  {#if showForm}
-    <form class="mb-6 space-y-3 rounded-xl bg-[var(--ec-surface)] p-4 shadow-sm" onsubmit={create}>
-      <div><label class="mb-1 block text-sm font-semibold" for="c">الكود</label><input id="c" bind:value={code} required class="w-full rounded-md border border-[var(--ec-border)] px-3 py-2" dir="ltr" /></div>
-      <div><label class="mb-1 block text-sm font-semibold" for="n">الاسم</label><input id="n" bind:value={name} required class="w-full rounded-md border border-[var(--ec-border)] px-3 py-2" /></div>
-      <button type="submit" class="rounded-md bg-[var(--ec-teal)] px-4 py-2 text-sm font-semibold text-white">حفظ</button>
-    </form>
-  {/if}
-  {#if loading}<p class="text-sm text-[var(--ec-text)]/60">جارٍ التحميل…</p>
-  {:else if items.length === 0}<p class="text-sm text-[var(--ec-text)]/60">لا توجد مواد بعد.</p>
-  {:else}
-    <div class="overflow-x-auto rounded-xl bg-[var(--ec-surface)] shadow-sm">
-      <table class="w-full text-sm">
-        <thead class="bg-[var(--ec-navy)] text-white"><tr><th class="px-3 py-2 text-right">الكود</th><th class="px-3 py-2 text-right">الاسم</th><th class="px-3 py-2 text-right">الحالة</th></tr></thead>
-        <tbody>{#each items as s}<tr class="border-t border-[var(--ec-border)]"><td class="px-3 py-2" dir="ltr">{s.code}</td><td class="px-3 py-2">{s.name}</td><td class="px-3 py-2">{s.is_active ? 'نشطة' : 'معطلة'}</td></tr>{/each}</tbody>
-      </table>
+{#snippet statusCell(s: Subject)}
+  <Badge status={s.is_active ? 'active' : 'inactive'} />
+{/snippet}
+
+<PageHeader
+  title="المواد"
+  subtitle={`${items.length} مادة — تُستخدم في الدورات والتقارير الأكاديمية`}
+>
+  <Button variant="ghost" size="sm" onclick={load} loading={loading}>↻ تحديث</Button>
+  <Button variant="primary" size="sm" onclick={() => (showForm = true)}>+ إضافة مادة</Button>
+</PageHeader>
+
+{#if error}
+  <div class="mb-4"><Alert kind="error" onClose={() => (error = '')}>{error}</Alert></div>
+{/if}
+
+<Card pad={false}>
+  <div class="border-b px-5 py-4" style="border-color:var(--ec-border)">
+    <div class="ec-toolbar" style="margin-bottom:0">
+      <input
+        class="ec-input grow"
+        type="search"
+        placeholder="ابحث بالاسم أو الكود…"
+        bind:value={search}
+        aria-label="بحث في المواد"
+      />
+      <span class="ec-muted text-[13px]">{filtered.length} نتيجة</span>
     </div>
-  {/if}
-</section>
+  </div>
+
+  <div class="p-4">
+    <DataTable
+      columns={[
+        { key: 'code', label: 'الكود', num: true, width: '110px' },
+        { key: 'name', label: 'اسم المادة' },
+        { key: 'description', label: 'الوصف', format: (v) => String(v || '—') },
+        { key: 'is_active', label: 'الحالة', render: statusCell, width: '120px' }
+      ]}
+      rows={filtered}
+      rowKey={(s) => s.id}
+      loading={loading}
+      emptyTitle="لا توجد مواد"
+      emptyHint="أضف أول مادة لتتمكن من إنشاء الدورات."
+      emptyIcon="✔"
+    />
+  </div>
+</Card>
+
+<Modal
+  open={showForm}
+  title="إضافة مادة جديدة"
+  subtitle="الكود فريد ويُستخدم في التقارير."
+  onClose={() => (showForm = false)}
+>
+  <form class="space-y-4" onsubmit={create}>
+    {#if formError}
+      <Alert kind="error">{formError}</Alert>
+    {/if}
+    <div class="ec-form-grid">
+      <Field label="الكود" required hint="مثال: MATH101">
+        <input class="ec-input" dir="ltr" bind:value={code} required placeholder="MATH101" />
+      </Field>
+      <Field label="اسم المادة" required>
+        <input class="ec-input" bind:value={name} required placeholder="الرياضيات" />
+      </Field>
+    </div>
+    <Field label="الوصف">
+      <textarea class="ec-textarea" bind:value={description} placeholder="وصف مختصر…"></textarea>
+    </Field>
+    <div class="flex justify-end gap-2">
+      <Button variant="ghost" onclick={() => (showForm = false)}>إلغاء</Button>
+      <Button type="submit" variant="primary" loading={saving}>حفظ المادة</Button>
+    </div>
+  </form>
+</Modal>

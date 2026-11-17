@@ -199,3 +199,65 @@ async fn get_payment_voucher(pool: &SqlitePool, id: i64) -> AppResult<PaymentVou
         source_id: r.get("source_id"),
     })
 }
+
+// ---------- listing (Phase 16: the vouchers screen) ----------
+
+/// One row of the payment-vouchers screen.
+#[derive(Debug, Serialize, Clone)]
+pub struct PaymentVoucherRow {
+    pub id: i64,
+    pub voucher_no: i64,
+    pub voucher_date: String,
+    pub beneficiary_type: String,
+    pub beneficiary_name: String,
+    pub amount_minor: i64,
+    pub method: String,
+    pub status: String,
+    pub source_type: String,
+}
+
+/// Every payment voucher, newest first. Requires `ledger.view`.
+pub async fn list_payment_vouchers(
+    pool: &SqlitePool,
+    actor: &Actor,
+    status: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<PaymentVoucherRow>> {
+    actor.require("ledger.view")?;
+    let limit = limit.clamp(1, 500);
+    let rows = if let Some(st) = status {
+        sqlx::query(
+            "SELECT id, voucher_no, voucher_date, beneficiary_type, beneficiary_name,
+                    amount_minor, method, status, source_type
+             FROM payment_vouchers WHERE status = ?
+             ORDER BY id DESC LIMIT ?",
+        )
+        .bind(st)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, voucher_no, voucher_date, beneficiary_type, beneficiary_name,
+                    amount_minor, method, status, source_type
+             FROM payment_vouchers ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows
+        .iter()
+        .map(|r| PaymentVoucherRow {
+            id: r.get("id"),
+            voucher_no: r.get("voucher_no"),
+            voucher_date: r.get("voucher_date"),
+            beneficiary_type: r.get("beneficiary_type"),
+            beneficiary_name: r.get("beneficiary_name"),
+            amount_minor: r.get("amount_minor"),
+            method: r.get("method"),
+            status: r.get("status"),
+            source_type: r.get("source_type"),
+        })
+        .collect())
+}

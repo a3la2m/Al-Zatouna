@@ -1,0 +1,2 @@
+ALTER TABLE saved_reports ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE saved_reports ADD COLUMN filters_json TEXT NOT NULL DEFAULT '{}';

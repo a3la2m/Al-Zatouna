@@ -125,3 +125,40 @@ async fn vch008_amount_words_arabic() {
     // monotonic: different amounts produce different strings (smoke)
     assert_ne!(amount_to_words_minor(100, 2), amount_to_words_minor(200, 2));
 }
+
+/// vch013: cash receipts require open register when setting enabled.
+#[tokio::test]
+async fn vch013_cash_requires_open_register() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    // enable setting
+    sqlx::query("UPDATE center_settings SET cash_rules_json = '{\"cash_receipts_require_open_register\":true}' WHERE id=1")
+        .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE cash_registers SET status='closed'").execute(&pool).await.unwrap();
+    let cash: i64 = sqlx::query_scalar("SELECT id FROM accounts LIMIT 1").fetch_one(&pool).await.unwrap();
+    let recv: i64 = sqlx::query_scalar("SELECT id FROM accounts LIMIT 1 OFFSET 1").fetch_one(&pool).await.unwrap();
+    // no open register -> error
+    let r = ec_core::finance::payments::record_payment(&pool, &admin, branch, cash, recv, "vch13", &[
+        ec_core::finance::payments::PaymentAllocation { enrollment_id: 1, amount_minor: 100 },
+    ], "").await;
+    assert!(r.is_err());
+    // open register -> ok
+    ec_core::vouchers::cash::open_register(&pool, &admin, branch, "MAIN").await.unwrap();
+    let r2 = ec_core::finance::payments::record_payment(&pool, &admin, branch, cash, recv, "vch13b", &[
+        ec_core::finance::payments::PaymentAllocation { enrollment_id: 1, amount_minor: 100 },
+    ], "").await;
+    assert!(r2.is_ok());
+}
+
+/// vch014: expense paid creates voucher.
+#[tokio::test]
+async fn vch014_expense_paid_creates_voucher() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    let cat: i64 = sqlx::query_scalar("SELECT id FROM expense_categories LIMIT 1").fetch_one(&pool).await.unwrap();
+    let acc: i64 = sqlx::query_scalar("SELECT id FROM accounts LIMIT 1").fetch_one(&pool).await.unwrap();
+    let e = ec_core::vouchers::expenses::create_expense(&pool, &admin, branch, cat, "2026-01-01", 500, "benef", "desc", "cash", acc).await.unwrap();
+    ec_core::vouchers::expenses::approve_expense(&pool, &admin, e.id).await.unwrap();
+    let e2 = ec_core::vouchers::expenses::mark_expense_paid(&pool, &admin, e.id, acc).await.unwrap();
+    assert_eq!(e2.status, "paid");
+}

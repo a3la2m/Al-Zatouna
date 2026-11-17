@@ -1,7 +1,7 @@
 //! Shortfall decisions (Phase 6).
 
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use crate::error::AppError;
 use crate::AppResult;
@@ -76,7 +76,7 @@ pub async fn propose_shortfall(
         .await?;
     // collected = sum of receipt allocations for this enrollment (approx via credit ledger or 0)
     let collected: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount_minor), 0) FROM student_credit_ledger WHERE enrollment_id = ? AND entry_type = 'payment'",
+        "SELECT COALESCE(SUM(credit_minor), 0) FROM student_credit_ledger WHERE enrollment_id = ? AND ref_type = 'receipt'",
     )
     .bind(enrollment_id)
     .fetch_one(pool)
@@ -102,7 +102,7 @@ pub async fn decide_shortfall(
     center_revenue_account: i64,
     teacher_payable_account: i64,
     student_receivable_account: i64,
-    branch_id: i64,
+    _branch_id: i64,
 ) -> AppResult<ShortfallDecision> {
     actor.require("shortfall.decide")?;
     let dt = ShortfallDecisionType::parse(decision_type)?;

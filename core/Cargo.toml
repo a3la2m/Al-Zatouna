@@ -24,6 +24,7 @@ typst-pdf = "0.15"
 typst-render = "0.15"
 typst-layout = "0.15"
 rust_xlsxwriter = { workspace = true }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [features]
 test-utils = ["dep:tempfile"]

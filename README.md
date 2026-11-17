@@ -4,7 +4,7 @@
 
 - **الطبقة الخلفية:** Rust + Tauri 2 + SQLite (WAL) + SQLx
 - **الواجهة:** SvelteKit (Svelte 5) + TypeScript + Tailwind CSS + RTL كامل
-- **الحالة الحالية:** المرحلة 1 — التحليل والتصميم (لم يبدأ كتابة الكود التشغيلي بعد)
+- **الحالة الحالية:** المراحل 1–15 منجزة (backend)، 166 اختباراً ناجحاً، بناء Tauri 2 ناجح. المتبقي: Phase 16 (UI deepening) و Phase 17 (E2E/packaging).
 
 ## خارطة المراحل
 

@@ -73,7 +73,7 @@ pub async fn enroll(
 ) -> AppResult<Enrollment> {
     actor.require("courses.edit")?; // proxy for enrollment permission
     // course + capacity
-    let (is_private, max_students, min_students): (i64, i64, i64) =
+    let (is_private, max_students, _min_students): (i64, i64, i64) =
         sqlx::query_as("SELECT is_private, max_students, min_students FROM courses WHERE id = ?")
             .bind(course_id)
             .fetch_one(pool)
@@ -110,6 +110,7 @@ pub async fn enroll(
     if net < 0 {
         return Err(AppError::validation("صافي الرسوم لا يمكن أن يكون سالباً"));
     }
+    let mut tx = pool.begin().await?;
     let res = sqlx::query(
         "INSERT INTO enrollments (branch_id, student_id, course_id, enrolled_date,
          base_fee_minor, discount_minor, waiver_minor, net_fee_minor, notes, created_by)
@@ -125,9 +126,16 @@ pub async fn enroll(
     .bind(net)
     .bind(notes)
     .bind(actor.user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    let e = enrollment_by_id(pool, res.last_insert_rowid()).await?;
+    let enrollment_id = res.last_insert_rowid();
+    // Phase 17: issue the two draft vouchers that follow every registration.
+    crate::finance::payments::create_enrollment_vouchers_in_tx(
+        &mut tx, actor, branch_id, enrollment_id, student_id, course_id, net,
+    )
+    .await?;
+    tx.commit().await?;
+    let e = enrollment_by_id(pool, enrollment_id).await?;
     log_audit(pool, actor.user_id, "enrollments.create", "enrollments", Some(e.id),
         None, Some(snapshot(&e)), "").await;
     Ok(e)

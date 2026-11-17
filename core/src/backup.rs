@@ -87,15 +87,15 @@ pub async fn create_backup(
     let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let pkg = dest_root.join(format!("backup_{}", ts));
     fs::create_dir_all(&pkg)?;
-    let snap = pkg.join("snapshot.db");
-    create_snapshot(pool, &snap).await?;
+    let _snap = pkg.join("snapshot.db");
+    create_snapshot(pool, &_snap).await?;
 
     // manifest
     let mut files = Vec::new();
-    let meta = fs::metadata(&snap)?;
+    let meta = fs::metadata(&_snap)?;
     files.push(ManifestFile {
         path: "snapshot.db".into(),
-        sha256: sha256_file(&snap)?,
+        sha256: sha256_file(&_snap)?,
         size: meta.len(),
     });
     // include db_meta? already inside snapshot
@@ -145,7 +145,7 @@ pub fn restore_backup(pkg: &Path, data_dir_db: &Path, safety_dir: &Path) -> AppR
     if data_dir_db.exists() {
         fs::copy(data_dir_db, &safety_copy)?;
     }
-    let snap = pkg.join("snapshot.db");
+    let _snap = pkg.join("snapshot.db");
     // find snapshot file from manifest
     let snap_name = manifest
         .files

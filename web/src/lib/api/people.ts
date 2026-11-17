@@ -103,7 +103,25 @@ export const peopleApi = {
         branch_id: branchId,
         status,
         search
-      })
+      }),
+
+    create: (
+      token: string,
+      data: {
+        branch_id: number;
+        full_name: string;
+        phone: string;
+        email: string;
+        specialty: string;
+        qualifications: string;
+        address: string;
+        hire_date: string;
+        notes: string;
+      }
+    ) => invoke<Teacher>('teachers_create', { token, ...data }),
+
+    edit: (token: string, id: number, patch: Partial<Teacher>) =>
+      invoke<Teacher>('teachers_edit', { token, id, ...patch })
   },
   subjects: {
     list: (token: string, activeOnly = true) =>

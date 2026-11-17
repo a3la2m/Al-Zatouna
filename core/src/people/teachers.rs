@@ -366,3 +366,12 @@ pub async fn teacher_id_for_user(pool: &SqlitePool, user_id: i64) -> AppResult<O
         .flatten();
     Ok(r)
 }
+
+/// Scope helper for teacher data isolation (FR-4.4).
+pub async fn scope_for_teacher(pool: &SqlitePool, actor: &Actor) -> AppResult<Option<i64>> {
+    teacher_id_for_user(pool, actor.user_id).await
+}
+
+pub async fn linked_teacher_id(pool: &SqlitePool, user_id: i64) -> AppResult<Option<i64>> {
+    teacher_id_for_user(pool, user_id).await
+}

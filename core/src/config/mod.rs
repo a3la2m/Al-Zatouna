@@ -54,6 +54,11 @@ fn settings_file_path() -> Result<PathBuf> {
         .ok_or_else(|| AppError::internal("no OS config directory available"))
 }
 
+/// Absolute path of the OS settings file (None when no config dir exists).
+pub fn settings_path() -> Option<PathBuf> {
+    settings_file_path().ok()
+}
+
 pub fn load() -> AppSettings {
     let path = match settings_file_path() {
         Ok(p) => p,
@@ -138,6 +143,30 @@ pub async fn change_data_dir(new_root: &std::path::Path) -> Result<(sqlx::Sqlite
             std::fs::create_dir_all(new_db.parent().unwrap())?;
             std::fs::copy(&old_db, &new_db)?;
         }
+    }
+    let pool = crate::database::open_pool(&new_dd.db_path()).await?;
+    crate::database::run_migrations(&pool, env!("CARGO_PKG_VERSION")).await?;
+    let check = crate::database::quick_check(&pool).await?;
+    if check != "ok" {
+        return Err(AppError::storage(format!("quick check failed: {check}")));
+    }
+    let mut new_settings = settings;
+    new_settings.data_directory = Some(new_dd.root().to_string_lossy().to_string());
+    new_settings.first_run_completed = true;
+    save(&new_settings)?;
+    Ok((pool, new_dd))
+}
+
+/// Open an *existing* data directory (imported database) and make it the
+/// active one. Unlike [`change_data_dir`] this never copies the current DB over
+/// the target, so the imported data is preserved.
+pub async fn adopt_data_dir(new_root: &std::path::Path) -> Result<(sqlx::SqlitePool, DataDir)> {
+    let settings = load();
+    let new_dd = DataDir::from_root(new_root);
+    new_dd.create_tree()?;
+    new_dd.test_write_permissions()?;
+    if !new_dd.db_path().exists() {
+        return Err(AppError::validation("لا توجد قاعدة بيانات في الأرشيف المستورد"));
     }
     let pool = crate::database::open_pool(&new_dd.db_path()).await?;
     crate::database::run_migrations(&pool, env!("CARGO_PKG_VERSION")).await?;

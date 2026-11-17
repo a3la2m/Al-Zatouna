@@ -13,4 +13,6 @@ pub use attendance::{record_student_attendance, record_teacher_attendance, Stude
 pub use courses::{check_maker_checker, create_course, get_course, list_courses, set_course_status, Course, NewCourse};
 pub use enrollments::{enroll, list_enrollments, set_enrollment_status, Enrollment};
 pub use payment_plans::{create_payment_plan, list_payment_plan, record_installment_payment, PaymentPlan, Installment};
-pub use sessions::{add_schedule, create_session, link_makeup_original, list_sessions, set_session_status, CourseSchedule, Session};
+pub use sessions::{add_schedule, change_session_room_teacher, create_session, link_makeup_original, list_sessions, set_session_status, CourseSchedule, Session};
+
+pub mod schedule;

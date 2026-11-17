@@ -145,3 +145,79 @@ pub async fn record_teacher_attendance(
         None, Some(snapshot(&ta)), "").await;
     Ok(ta)
 }
+
+/// Whether cancelled sessions count toward teacher entitlement per agreement conditions.
+pub fn cancelled_sessions_count(conditions_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(conditions_json)
+        .ok()
+        .and_then(|v| v.get("cancelled_effects").and_then(|x| x.get("count_for_teacher")).and_then(|b| b.as_bool()))
+        .unwrap_or(true)
+}
+
+/// Makeup session inherits weight of original (returns original_session_id).
+pub fn makeup_weight_inherited(original_session_id: Option<i64>) -> bool {
+    original_session_id.is_some()
+}
+
+// ---------- attendance sheet (Phase 16: the attendance screen) ----------
+
+/// One row of a session's attendance sheet: an enrolled student plus whatever
+/// has been recorded for them so far (`status = null` means "not recorded yet").
+#[derive(Debug, Serialize, Clone)]
+pub struct AttendanceSheetRow {
+    pub student_id: i64,
+    pub student_no: i64,
+    pub full_name: String,
+    pub attendance_id: Option<i64>,
+    pub status: Option<String>,
+    pub late_minutes: Option<i64>,
+    pub notes: String,
+    pub recorded_at: Option<String>,
+}
+
+/// The full sheet for one session, ordered by student number.
+///
+/// Students come from the enrollments of the session's course (active/frozen),
+/// left-joined with whatever has already been recorded — so the screen shows
+/// exactly who is still missing a mark, without the caller doing any joins.
+pub async fn attendance_sheet(
+    pool: &SqlitePool,
+    actor: &Actor,
+    session_id: i64,
+) -> AppResult<Vec<AttendanceSheetRow>> {
+    actor.require("attendance.record")?;
+    let rows = sqlx::query(
+        "SELECT e.student_id AS student_id,
+                st.student_no AS student_no,
+                st.full_name AS full_name,
+                a.id AS attendance_id,
+                a.status AS status,
+                a.late_minutes AS late_minutes,
+                COALESCE(a.notes, '') AS notes,
+                a.recorded_at AS recorded_at
+         FROM sessions s
+         JOIN enrollments e
+           ON e.course_id = s.course_id AND e.status IN ('active','frozen')
+         JOIN students st ON st.id = e.student_id
+         LEFT JOIN student_attendance a
+           ON a.session_id = s.id AND a.student_id = e.student_id
+         WHERE s.id = ?
+         ORDER BY st.student_no, st.id",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| AttendanceSheetRow {
+            student_id: r.get("student_id"),
+            student_no: r.get("student_no"),
+            full_name: r.get("full_name"),
+            attendance_id: r.get::<Option<i64>, _>("attendance_id"),
+            status: r.get::<Option<String>, _>("status"),
+            late_minutes: r.get::<Option<i64>, _>("late_minutes"),
+            notes: r.get("notes"),
+            recorded_at: r.get::<Option<String>, _>("recorded_at"),
+        })
+        .collect())
+}

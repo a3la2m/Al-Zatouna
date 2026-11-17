@@ -2,6 +2,7 @@
 /// When running in a plain browser (dev preview) calls return a friendly
 /// error instead of pretending success.
 import { isTauri } from '$lib/env';
+import { sessionExpired, sessionToken, sessionUser, clearPersistedSession } from '$lib/stores/app';
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
@@ -46,7 +47,25 @@ export async function invoke<T = unknown>(
       message: 'يمكن تشغيل هذا الإجراء داخل التطبيق فقط'
     });
   }
-  return await fn<T>(cmd, args);
+  try {
+    return await fn<T>(cmd, args);
+  } catch (e) {
+    if (isSessionExpired(e)) {
+      sessionToken.set(null);
+      sessionUser.set(null);
+      clearPersistedSession();
+      sessionExpired.set(true);
+    }
+    throw e;
+  }
+}
+
+/// The Rust service reports an expired session with this specific code + message.
+function isSessionExpired(e: unknown): boolean {
+  const msg = (e as { message?: string })?.message ?? '';
+  const code = (e as { code?: string })?.code ?? '';
+  return code === 'permission_denied' &&
+    (msg.includes('الجلسة غير سارية') || msg.includes('أعد تسجيل الدخول'));
 }
 
 export async function safeInvoke<T = unknown>(

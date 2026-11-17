@@ -1,6 +1,7 @@
 //! Printing (Phase 8): Typst-based A4 PDF generation.
 
-use std::sync::Arc;
+
+use std::collections::HashMap;
 
 use typst::diag::FileResult;
 use typst::foundations::{Bytes, Datetime, Duration};
@@ -16,10 +17,17 @@ pub struct TypstWorld {
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,
     fonts: Vec<Font>,
+    assets: HashMap<String, Bytes>,
 }
 
 impl TypstWorld {
     pub fn new(template: &str) -> Self {
+        Self::new_with_assets(template, &[])
+    }
+
+    /// Build a world that can serve embedded assets (e.g. the center logo)
+    /// referenced from the template as `#image("logo.png")`.
+    pub fn new_with_assets(template: &str, assets: &[(&str, Vec<u8>)]) -> Self {
         let main = FileId::new(RootedPath::new(VirtualRoot::Project, VirtualPath::new("main.typ").unwrap()));
         let source = Source::new(main, template.to_string());
         let library = LazyHash::new(Library::default());
@@ -35,7 +43,11 @@ impl TypstWorld {
             }
         }
         let book = LazyHash::new(book);
-        Self { main, source, library, book, fonts }
+        let assets = assets
+            .iter()
+            .map(|(name, bytes)| (name.to_string(), Bytes::new(bytes.clone())))
+            .collect();
+        Self { main, source, library, book, fonts, assets }
     }
 }
 
@@ -53,14 +65,23 @@ impl World for TypstWorld {
         if id == self.main {
             Ok(self.source.clone())
         } else {
-            Err(typst::diag::FileError::NotFound(id.vpath().as_rooted_path().to_path_buf()))
+            Err(typst::diag::FileError::NotFound(std::path::PathBuf::from(id.vpath().get_with_slash())))
         }
     }
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         if id == self.main {
             Ok(Bytes::from_string(self.source.text().to_string()))
         } else {
-            Err(typst::diag::FileError::NotFound(id.vpath().as_rooted_path().to_path_buf()))
+            let path = id.vpath().get_with_slash();
+            if let Some(bytes) = self.assets.get(path) {
+                return Ok(bytes.clone());
+            }
+            // also try just the file name (when the asset is referenced as "logo.png")
+            let name = path.rsplit('/').next().unwrap_or(&path);
+            if let Some(bytes) = self.assets.get(name) {
+                return Ok(bytes.clone());
+            }
+            Err(typst::diag::FileError::NotFound(std::path::PathBuf::from(path)))
         }
     }
     fn font(&self, index: usize) -> Option<Font> {
@@ -80,8 +101,29 @@ pub fn render_pdf(template: &str) -> Result<Vec<u8>, String> {
     Ok(pdf)
 }
 
+/// Render a Typst template to PDF bytes with embedded assets (logo etc).
+pub fn render_pdf_with_assets(
+    template: &str,
+    assets: &[(&str, Vec<u8>)],
+) -> Result<Vec<u8>, String> {
+    let world = TypstWorld::new_with_assets(template, assets);
+    let doc = typst::compile::<typst_layout::PagedDocument>(&world).output.map_err(|e| format!("{:?}", e))?;
+    let pdf = typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default())
+        .map_err(|e| format!("{:?}", e))?;
+    Ok(pdf)
+}
+
+/// Render a Typst template to PNG (first page) with embedded assets.
+pub fn render_png_with_assets(template: &str, assets: &[(&str, Vec<u8>)], _scale: f32) -> Result<Vec<u8>, String> {
+    let world = TypstWorld::new_with_assets(template, assets);
+    let doc = typst::compile::<typst_layout::PagedDocument>(&world).output.map_err(|e| format!("{:?}", e))?;
+    let page = doc.pages().first().ok_or("no pages")?;
+    let pixmap = typst_render::render(page, &typst_render::RenderOptions::default());
+    Ok(pixmap.encode_png().map_err(|e| format!("{:?}", e))?)
+}
+
 /// Render a Typst template to PNG (first page) for preview parity tests.
-pub fn render_png_first_page(template: &str, scale: f32) -> Result<Vec<u8>, String> {
+pub fn render_png_first_page(template: &str, _scale: f32) -> Result<Vec<u8>, String> {
     let world = TypstWorld::new(template);
     let doc = typst::compile::<typst_layout::PagedDocument>(&world).output.map_err(|e| format!("{:?}", e))?;
     let page = doc.pages().first().ok_or("no pages")?;

@@ -22,8 +22,8 @@ export const authApi = {
       password
     }),
 
-  login: (username: string, password: string) =>
-    invoke<LoginResultDto>('auth_login', { username, password }),
+  login: (username: string, password: string, remember = false) =>
+    invoke<LoginResultDto>('auth_login', { username, password, remember }),
 
   logout: (token: string) => invoke<void>('auth_logout', { token }),
 

@@ -1,94 +1,146 @@
 <script lang="ts">
-  import { authApi, type SessionUserDto } from '$lib/api/auth';
-  import { sessionToken, sessionUser } from '$lib/stores/app';
+  import { authApi } from '$lib/api/auth';
+  import { invoke } from '$lib/api';
+  import { sessionToken, sessionUser, persistSession } from '$lib/stores/app';
+  import { toast } from '$lib/toasts';
+  import Button from '$lib/components/Button.svelte';
+  import Field from '$lib/components/Field.svelte';
+  import Card from '$lib/components/Card.svelte';
+  import Alert from '$lib/components/Alert.svelte';
 
   let username = $state('');
   let password = $state('');
+  let remember = $state(false);
   let busy = $state(false);
   let error = $state('');
+  let info = $state('');
 
-  // first-run admin creation fields (shown when no admin exists)
+  // first-run admin creation
   let setupMode = $state(false);
   let newName = $state('');
 
+  // recovery mode
+  let recoverMode = $state(false);
+  let recoveryCode = $state('');
+  let newPassword = $state('');
+  let newPassword2 = $state('');
+
   async function submit(e?: SubmitEvent) {
     e?.preventDefault();
-    error = '';
-    busy = true;
+    error = ''; info = ''; busy = true;
     try {
-      if (setupMode) {
-        await authApi.createAdmin(username.trim(), newName.trim(), password);
-      }
-      const res = await authApi.login(username.trim(), password);
+      if (setupMode) await authApi.createAdmin(username.trim(), newName.trim(), password);
+      const res = await authApi.login(username.trim(), password, remember);
       sessionToken.set(res.token);
       sessionUser.set(res.user);
-      // TODO Phase 3.1: if res.must_change_password → route to change-password view
+      if (remember) persistSession(res.token, res.user);
+      if (res.must_change_password) {
+        info = 'يجب تغيير كلمة المرور من صفحة الإعدادات ← حسابي.';
+      }
     } catch (err) {
       error = (err as Error)?.message ?? 'خطأ غير متوقع';
       const msg = error;
-      // a data dir without users ⇒ offer the first-run admin setup
-      if (msg.includes('لم يُهيأ') || msg.includes('wizard')) {
-        setupMode = true;
-      }
+      if (msg.includes('لم يُهيأ') || msg.includes('wizard')) setupMode = true;
     } finally {
       busy = false;
     }
   }
+
+  async function recover(e: SubmitEvent) {
+    e.preventDefault();
+    error = ''; info = '';
+    if (newPassword !== newPassword2) {
+      error = 'تأكيد كلمة المرور غير مطابق';
+      return;
+    }
+    busy = true;
+    try {
+      await invoke('auth_recover_password', {
+        username: username.trim(), code: recoveryCode.trim(),
+        new_password: newPassword
+      });
+      info = 'تمت إعادة تعيين كلمة المرور — سجّل الدخول بها الآن.';
+      recoverMode = false;
+      recoveryCode = ''; newPassword = ''; newPassword2 = '';
+    } catch (err) {
+      error = (err as Error)?.message ?? 'تعذّر الاسترداد';
+    } finally { busy = false; }
+  }
 </script>
 
-<section class="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center">
-  <h1 class="mb-1 text-2xl font-bold text-[var(--ec-navy)]">
-    {setupMode ? 'إنشاء المدير الأول' : 'تسجيل الدخول'}
-  </h1>
-  <p class="mb-6 text-sm text-[var(--ec-text)]/60">
-    {setupMode
-      ? 'الخطوة الأولى بعد تحديد مجلد البيانات'
-      : 'نظام إدارة المركز التعليمي'}
-  </p>
+<section class="mx-auto flex min-h-[70vh] w-full max-w-md flex-col justify-center">
+  <div class="mb-5 text-center">
+    <h1 class="text-2xl font-bold" style="color:var(--ec-navy)">
+      {setupMode ? 'إنشاء المدير الأول' : recoverMode ? 'استرداد كلمة المرور' : 'تسجيل الدخول'}
+    </h1>
+    <p class="mt-1 text-sm" style="color:var(--ec-text-3)">
+      {setupMode ? 'الخطوة الأولى بعد تحديد مجلد البيانات' : recoverMode ? 'أدخل رمز الاسترداد وكلمة المرور الجديدة' : 'نظام إدارة المركز التعليمي'}
+    </p>
+  </div>
 
-  <form class="card space-y-4 rounded-xl bg-[var(--ec-surface)] p-6 shadow-sm" onsubmit={submit}>
-    {#if setupMode}
-      <div>
-        <label class="mb-1 block text-sm font-semibold" for="fn">الاسم الكامل</label>
-        <input
-          id="fn" bind:value={newName} required
-          class="w-full rounded-md border border-[var(--ec-border)] px-3 py-2"
-          placeholder="مثال: مدير المركز"
-        />
-      </div>
+  <Card>
+    {#if recoverMode}
+      <form class="space-y-4" onsubmit={recover}>
+        {#if error}<Alert kind="error">{error}</Alert>{/if}
+        {#if info}<Alert kind="ok">{info}</Alert>{/if}
+        <Field label="اسم المستخدم" required>
+          <input class="ec-input" dir="ltr" bind:value={username} autocomplete="username" required />
+        </Field>
+        <Field label="رمز الاسترداد" hint="أحد الرموز التي أنشأها المدير ( ZYT-XXXX-XXXX-XXXX )." required>
+          <input class="ec-input" dir="ltr" bind:value={recoveryCode} placeholder="ZYT-XXXX-XXXX-XXXX" required />
+        </Field>
+        <Field label="كلمة المرور الجديدة" required hint="8 أحرف على الأقل.">
+          <input class="ec-input" type="password" dir="ltr" bind:value={newPassword} required minlength="8" autocomplete="new-password" />
+        </Field>
+        <Field label="تأكيد كلمة المرور" required>
+          <input class="ec-input" type="password" dir="ltr" bind:value={newPassword2} required minlength="8" autocomplete="new-password" />
+        </Field>
+        <Button type="submit" variant="primary" block loading={busy}>استرداد وتعيين كلمة المرور</Button>
+        <button type="button" class="ec-btn ec-btn-ghost ec-btn-sm w-full" onclick={() => { recoverMode = false; error = ''; info = ''; }}>
+          العودة إلى الدخول
+        </button>
+      </form>
+    {:else}
+      <form class="space-y-4" onsubmit={submit}>
+        {#if error}<Alert kind="error">{error}</Alert>{/if}
+        {#if info}<Alert kind="ok">{info}</Alert>{/if}
+        {#if setupMode}
+          <Field label="الاسم الكامل" required>
+            <input class="ec-input" bind:value={newName} required placeholder="مثال: مدير المركز" />
+          </Field>
+        {/if}
+        <Field label="اسم المستخدم" required>
+          <input class="ec-input" dir="ltr" bind:value={username} autocomplete="username" required />
+        </Field>
+        <Field label="كلمة المرور" required>
+          <input class="ec-input" type="password" dir="ltr" bind:value={password} autocomplete="current-password" required />
+        </Field>
+
+        <div class="flex items-center justify-between gap-3">
+          <label class="flex cursor-pointer items-center gap-2 text-[13px]" style="color:var(--ec-text-2)">
+            <input type="checkbox" bind:checked={remember} />
+            تذكّرني والبقاء مسجّلاً
+          </label>
+          <button
+            type="button"
+            class="text-[13px] font-semibold hover:underline"
+            style="color:var(--ec-blue)"
+            onclick={() => { recoverMode = true; error = ''; info = ''; }}
+          >
+            نسيت كلمة المرور؟
+          </button>
+        </div>
+
+        <Button type="submit" variant="primary" block loading={busy}>
+          {setupMode ? 'إنشاء المستخدم والدخول' : 'دخول'}
+        </Button>
+      </form>
     {/if}
-    <div>
-      <label class="mb-1 block text-sm font-semibold" for="un">اسم المستخدم</label>
-      <input
-        id="un" bind:value={username} required autocomplete="username"
-        class="w-full rounded-md border border-[var(--ec-border)] px-3 py-2 ltr:text-left"
-        dir="ltr"
-      />
-    </div>
-    <div>
-      <label class="mb-1 block text-sm font-semibold" for="pw">كلمة المرور</label>
-      <input
-        id="pw" bind:value={password} type="password" required
-        autocomplete="current-password"
-        class="w-full rounded-md border border-[var(--ec-border)] px-3 py-2 ltr:text-left"
-        dir="ltr"
-      />
-    </div>
+  </Card>
 
-    {#if error}
-      <p class="rounded bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</p>
-    {/if}
-
-    <button
-      type="submit"
-      disabled={busy}
-      class="w-full rounded-md bg-[var(--ec-blue)] py-2 font-semibold text-white hover:opacity-90 disabled:opacity-50"
-    >
-      {busy ? 'جارٍ…' : setupMode ? 'إنشاء المستخدم والدخول' : 'دخول'}
-    </button>
-  </form>
+  {#if !recoverMode}
+    <p class="mt-4 text-center text-[12px]" style="color:var(--ec-text-3)">
+      عند تفعيل «تذكّرني» تبقى الجلسة صالحة حتى بعد إغلاق التطبيق (30 يوماً).
+    </p>
+  {/if}
 </section>
-
-<style>
-  .card { border: 1px solid var(--ec-border); }
-</style>

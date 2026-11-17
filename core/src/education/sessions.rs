@@ -137,7 +137,7 @@ async fn clash_check(
     exclude_session: Option<i64>,
 ) -> AppResult<()> {
     // room overlap
-    let mut q = sqlx::query(
+    let q = sqlx::query(
         "SELECT COUNT(*) FROM sessions
          WHERE room_id = ? AND session_date = ?
            AND start_time < ? AND end_time > ?
@@ -155,7 +155,7 @@ async fn clash_check(
         return Err(AppError::Conflict("تعارض في القاعة: حصة متداخلة".into()));
     }
     // teacher overlap (primary or substitute)
-    let mut q = sqlx::query(
+    let q = sqlx::query(
         "SELECT COUNT(*) FROM sessions
          WHERE session_date = ? AND start_time < ? AND end_time > ?
            AND status NOT IN ('cancelled')
@@ -174,7 +174,7 @@ async fn clash_check(
         return Err(AppError::Conflict("تعارض في المدرس: حصة متداخلة".into()));
     }
     if let Some(sub) = substitute {
-        let mut q = sqlx::query(
+        let q = sqlx::query(
             "SELECT COUNT(*) FROM sessions
              WHERE session_date = ? AND start_time < ? AND end_time > ?
                AND status NOT IN ('cancelled')
@@ -294,6 +294,20 @@ pub async fn set_session_status(
         // nothing else here — original is already cancelled/postponed.
     }
     let after = session_by_id(pool, id).await?;
+    if substitute_teacher_id.is_some() {
+        sqlx::query(
+            "INSERT INTO course_change_log (course_id, changed_by, action, before_json, after_json, reason)
+             VALUES (?, ?, 'substitute_teacher', ?, ?, ?)",
+        )
+        .bind(before.course_id)
+        .bind(actor.user_id)
+        .bind(snapshot(&before).to_string())
+        .bind(snapshot(&after).to_string())
+        .bind(reason)
+        .execute(pool)
+        .await
+        .ok();
+    }
     log_audit(pool, actor.user_id, "sessions.change", "sessions", Some(id),
         Some(snapshot(&before)), Some(snapshot(&after)), reason).await;
     Ok(after)
@@ -336,4 +350,60 @@ pub async fn list_sessions(
     .bind(to);
     let rows = q.fetch_all(pool).await?;
     Ok(rows.iter().map(row_session).collect())
+}
+
+/// Change room/teacher/substitute for a session and write course_change_log (FR-6.5).
+pub async fn change_session_room_teacher(
+    pool: &SqlitePool,
+    actor: &Actor,
+    session_id: i64,
+    room_id: i64,
+    teacher_id: i64,
+    substitute_teacher_id: Option<i64>,
+    reason: &str,
+) -> AppResult<Session> {
+    actor.require("schedule.manage")?;
+    if reason.trim().is_empty() {
+        return Err(AppError::validation("السبب مطلوب"));
+    }
+    let before = session_by_id(pool, session_id).await?;
+    clash_check(pool, room_id, teacher_id, substitute_teacher_id,
+        &before.session_date, &before.start_time, &before.end_time, Some(session_id)).await?;
+    sqlx::query(
+        "UPDATE sessions SET room_id=?, teacher_id=?, substitute_teacher_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+    )
+    .bind(room_id)
+    .bind(teacher_id)
+    .bind(substitute_teacher_id)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    let after = session_by_id(pool, session_id).await?;
+    sqlx::query(
+        "INSERT INTO course_change_log (course_id, changed_by, action, before_json, after_json, reason)
+         VALUES (?, ?, 'session_room_teacher_change', ?, ?, ?)",
+    )
+    .bind(before.course_id)
+    .bind(actor.user_id)
+    .bind(snapshot(&before).to_string())
+    .bind(snapshot(&after).to_string())
+    .bind(reason)
+    .execute(pool)
+    .await
+    .ok();
+    log_audit(pool, actor.user_id, "sessions.change", "sessions", Some(session_id),
+        Some(snapshot(&before)), Some(snapshot(&after)), reason).await;
+    Ok(after)
+}
+
+pub async fn update_session_room_teacher(
+    pool: &SqlitePool,
+    actor: &Actor,
+    session_id: i64,
+    room_id: i64,
+    teacher_id: i64,
+    substitute_teacher_id: Option<i64>,
+    reason: &str,
+) -> AppResult<Session> {
+    change_session_room_teacher(pool, actor, session_id, room_id, teacher_id, substitute_teacher_id, reason).await
 }

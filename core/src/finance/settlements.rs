@@ -61,7 +61,7 @@ pub async fn prepare_settlement(
     pool: &SqlitePool,
     actor: &Actor,
     kind: SettlementKind,
-    scope_id: Option<i64>,
+    _scope_id: Option<i64>,
     period_from: &str,
     period_to: &str,
     snapshot_json: &str,

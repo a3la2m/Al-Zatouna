@@ -11,9 +11,14 @@
 
 pub mod common;
 pub mod dashboard;
+pub mod details;
+pub mod notifications;
+pub mod documents;
+pub mod archive;
 pub mod auth;
 pub mod backup;
 pub mod config;
+pub mod settings_center;
 pub mod database;
 pub mod error;
 pub mod education;
@@ -27,5 +32,5 @@ pub use error::AppError;
 pub type AppResult<T> = Result<T, AppError>;
 
 /// Application identity constants.
-pub const APP_NAME: &str = "Education Center Management System";
+pub const APP_NAME: &str = "الزيتونة — نظام إدارة المركز التعليمي";
 pub const BUNDLE_ID: &str = "com.educationcenter.desktop";

@@ -312,3 +312,130 @@ async fn edu_agreement_snapshot_immutable() {
         .bind(approved.id).execute(&pool).await;
     assert!(err2.is_err(), "active agreement terms must be immutable");
 }
+
+/// edu014: course_change_log written on status change.
+#[tokio::test]
+async fn edu014_change_log_written() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    // reuse setup from edu011? Minimal: create course without agreement then change status draft->registration_open
+    let subject = ec_core::people::teachers::create_subject(&pool, &admin, "M", "رياضيات", "").await.unwrap();
+    let teacher = ec_core::people::teachers::create_teacher(&pool, &admin, branch, &ec_core::people::teachers::NewTeacher { full_name: "م".into(), ..Default::default() }).await.unwrap();
+    let room = ec_core::people::teachers::create_room(&pool, &admin, branch, "R", "ق", 10, "").await.unwrap();
+    let course = ec_core::education::courses::create_course(&pool, &admin, branch, &ec_core::education::courses::NewCourse {
+        name: "د".into(), subject_id: subject.id, teacher_id: teacher.id, room_id: room.id,
+        fee_minor: 10000, ..Default::default()
+    }).await.unwrap();
+    ec_core::education::courses::set_course_status(&pool, &admin, course.id, "registration_open", "open").await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM course_change_log WHERE course_id = ?")
+        .bind(course.id).fetch_one(&pool).await.unwrap();
+    assert!(n >= 1);
+}
+
+/// edu015: attendance weighting helper.
+#[tokio::test]
+async fn edu015_attendance_weighting() {
+    assert!(ec_core::education::attendance::cancelled_sessions_count("{}"));
+    assert!(!ec_core::education::attendance::cancelled_sessions_count(r#"{"cancelled_effects":{"count_for_teacher":false}}"#));
+    assert!(ec_core::education::attendance::makeup_weight_inherited(Some(1)));
+    assert!(!ec_core::education::attendance::makeup_weight_inherited(None));
+}
+
+/// Phase 17: every enrollment issues a draft receipt voucher + (when the
+/// active agreement gives the teacher a share) a draft payment voucher.
+#[tokio::test]
+async fn edu_enrollment_creates_vouchers() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    let (course, teacher, _room) = setup_course(&pool, &admin, branch, false, 30).await;
+
+    // active agreement: teacher gets 50% of the agreed fee
+    let agr = create_agreement_draft(&pool, &admin, course, "percent_of_agreed", Some(5000), None, None, None, "{}", "{}")
+        .await.unwrap();
+    approve_agreement(&pool, &admin, agr.id, admin.user_id, Some("test override")).await.unwrap();
+
+    let st = create_student(&pool, &admin, branch, &ec_core::people::students::NewStudent {
+        full_name: "طالب سند".into(), ..Default::default()
+    }).await.unwrap();
+    let en = enroll(&pool, &admin, branch, st.id, course, 10000, 0, 0, "2026-01-01", "")
+        .await.unwrap();
+
+    let rv: Option<(i64, String, i64)> = sqlx::query_as(
+        "SELECT id, status, amount_minor FROM receipt_vouchers WHERE enrollment_id=?",
+    ).bind(en.id).fetch_optional(&pool).await.unwrap();
+    let rv = rv.expect("receipt voucher must exist");
+    assert_eq!(rv.1, "draft");
+    assert_eq!(rv.2, 10000);
+
+    let pv: Option<(i64, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, status, amount_minor, teacher_id FROM payment_vouchers WHERE source_type='teacher_entitlement' AND source_id=?",
+    ).bind(en.id).fetch_optional(&pool).await.unwrap();
+    let pv = pv.expect("payment voucher must exist");
+    assert_eq!(pv.1, "draft");
+    assert_eq!(pv.2, 5000, "teacher gets 50% of 10000");
+    assert_eq!(pv.3, teacher);
+}
+
+// Phase 18: weekly schedule rules, clash detection, session generation.
+#[tokio::test]
+async fn sched001_rule_clash_and_generation() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    let (course, teacher, room) = setup_course(&pool, &admin, branch, false, 30).await;
+    let subject: i64 = sqlx::query_scalar("SELECT subject_id FROM courses WHERE id=?").bind(course).fetch_one(&pool).await.unwrap();
+    let room2 = create_room(&pool, &admin, branch, "R2", "ق2", 30, "").await.unwrap();
+
+    // add Monday 10:00-11:00 rule
+    let rule = ec_core::education::schedule::add_rule(&pool, &admin, course, 1, "10:00", "11:00", room, teacher, "", "")
+        .await.unwrap();
+    assert_eq!(rule.weekday, 1);
+
+    // same teacher + overlapping time on another course → clash
+    let c2 = create_course(&pool, &admin, branch, &NewCourse {
+        name: "دورة ثانية".into(), subject_id: subject, teacher_id: teacher, room_id: room2.id,
+        fee_minor: 5000, ..Default::default()
+    }).await.unwrap();
+    let err = ec_core::education::schedule::add_rule(&pool, &admin, c2.id, 1, "10:30", "11:30", room2.id, teacher, "", "")
+        .await.unwrap_err();
+    assert!(format!("{:?}", err).contains("مشغول") || format!("{:?}", err).contains("محجوز"), "{err:?}");
+
+    // non-overlapping rule is fine
+    let rule2 = ec_core::education::schedule::add_rule(&pool, &admin, c2.id, 1, "12:00", "13:00", room2.id, teacher, "", "")
+        .await.unwrap();
+    assert_eq!(rule2.id > rule.id, true);
+
+    // generate sessions for course 1 over 2026-11-02 (Monday) .. 2026-11-08
+    let preview = ec_core::education::schedule::generate_sessions(&pool, &admin, course, "2026-11-02", "2026-11-08", false)
+        .await.unwrap();
+    assert_eq!(preview.len(), 1, "one Monday in range");
+    assert_eq!(preview[0].session_date, "2026-11-02");
+    let count_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE course_id=?").bind(course).fetch_one(&pool).await.unwrap();
+    assert_eq!(count_before, 0);
+    let gen = ec_core::education::schedule::generate_sessions(&pool, &admin, course, "2026-11-02", "2026-11-08", true)
+        .await.unwrap();
+    assert_eq!(gen.len(), 1);
+    let count_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE course_id=?").bind(course).fetch_one(&pool).await.unwrap();
+    assert_eq!(count_after, 1);
+    let src: i64 = sqlx::query_scalar("SELECT source_schedule_id FROM sessions WHERE course_id=?").bind(course).fetch_one(&pool).await.unwrap();
+    assert_eq!(src, rule.id);
+    // idempotent: second run creates nothing
+    let gen2 = ec_core::education::schedule::generate_sessions(&pool, &admin, course, "2026-11-02", "2026-11-08", true)
+        .await.unwrap();
+    assert_eq!(gen2.len(), 0);
+}
+
+#[tokio::test]
+async fn sched002_activation_with_percent_agreement() {
+    let (pool, _t, branch) = fresh_seeded_pool().await;
+    let admin = admin_actor(&pool).await;
+    let (course, teacher, _room) = setup_course(&pool, &admin, branch, false, 30).await;
+    let _ = teacher;
+    // activation requires an active agreement — the auto-created one uses
+    // "percent_of_agreed" (must be in METHODS or create_agreement_draft fails)
+    let agr = create_agreement_draft(&pool, &admin, course, "percent_of_agreed", Some(10000), Some(10000), None, None, "{}", "{}")
+        .await.expect("percent_of_agreed is a valid method");
+    approve_agreement(&pool, &admin, agr.id, admin.user_id, Some("test override")).await.unwrap();
+    // setup_course already moved it to registration_open
+    let c = set_course_status(&pool, &admin, course, "active", "").await.unwrap();
+    assert_eq!(c.status, "active");
+}

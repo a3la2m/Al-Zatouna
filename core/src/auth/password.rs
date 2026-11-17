@@ -15,7 +15,7 @@ pub fn argon2_instance() -> Argon2<'static> {
     Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
-        argon2::Params::new(64 * 1024, 3, 1, None).expect("valid argon2 params"),
+        argon2::Params::new(19 * 1024, 2, 1, None).expect("valid argon2 params"),
     )
 }
 
@@ -87,4 +87,14 @@ mod tests {
         assert!(validate_password("OKPASSWORD", "okpassword").is_err());
         assert!(validate_password("good-password", "user1").is_ok());
     }
+}
+
+
+/// True if a stored PHC hash uses the old, slow parameters (>=32 MB or t>=3).
+/// Callers can then rehash on the next successful login (lazy upgrade).
+pub fn needs_rehash(stored: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(stored) else { return false; };
+    let m = parsed.params.get_decimal("m").unwrap_or(0);
+    let t = parsed.params.get_decimal("t").unwrap_or(0);
+    m > 19 * 1024 || t > 2
 }

@@ -59,3 +59,8 @@ pub async fn log_audit(
     };
     let _ = crate::auth::audit::log(pool, ev).await;
 }
+
+/// Scope helper alias (FR-4.4).
+pub async fn scope_for_teacher(pool: &sqlx::SqlitePool, actor: &Actor) -> crate::AppResult<Option<i64>> {
+    crate::people::teachers::teacher_id_for_user(pool, actor.user_id).await
+}
