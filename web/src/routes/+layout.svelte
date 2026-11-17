@@ -11,11 +11,49 @@
     restoreSession, clearPersistedSession
   } from '$lib/stores/app';
   import { isTauri } from '$lib/env';
+  import { invoke } from '$lib/api';
 
   let { children }: { children: import('svelte').Snippet } = $props();
 
   // Restore a remembered session on startup before any guard runs.
-  onMount(() => { restoreSession(); });
+  onMount(() => {
+    restoreSession();
+
+    // Recover from accidental pinch/ctrl zoom and prevent it from getting stuck.
+    if (isTauri) {
+      invoke('window_reset_zoom').catch(() => {});
+    }
+    const resetZoom = () => {
+      if (isTauri) invoke('window_reset_zoom').catch(() => {});
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key;
+      if (k === '0' || k === 'Insert') {
+        e.preventDefault();
+        resetZoom();
+      } else if (k === '+' || k === '-' || k === '=' || k === '_') {
+        // block browser/webview zoom shortcuts — UI is a fixed desktop layout
+        e.preventDefault();
+      }
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    };
+    const blockGesture = (e: Event) => e.preventDefault();
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('wheel', onWheel, { passive: false });
+    document.addEventListener('gesturestart', blockGesture as EventListener, { passive: false } as any);
+    document.addEventListener('gesturechange', blockGesture as EventListener, { passive: false } as any);
+    document.addEventListener('gestureend', blockGesture as EventListener, { passive: false } as any);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('wheel', onWheel);
+      document.removeEventListener('gesturestart', blockGesture as EventListener);
+      document.removeEventListener('gesturechange', blockGesture as EventListener);
+      document.removeEventListener('gestureend', blockGesture as EventListener);
+    };
+  });
 
   // A logged-out user must never see a protected page (e.g. after logout from
   // /teachers, or navigating directly to a deep link). Send them to the login.

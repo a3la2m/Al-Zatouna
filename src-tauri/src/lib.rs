@@ -1498,6 +1498,19 @@ async fn telegram_respond_service(
 
 
 
+
+// ---------- window helpers ----------
+
+/// Reset webview zoom to 100%. Fixes accidental pinch/ctrl zoom getting stuck.
+#[tauri::command]
+fn window_reset_zoom(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_zoom(1.0).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ---------- shareable data bundles (Phase 24) ----------
 
 /// Export a compressed bundle (database snapshot + settings + assets).
@@ -2004,6 +2017,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            window_reset_zoom,
             app_info,
             wizard_choose_data_dir,
             auth_create_admin,
