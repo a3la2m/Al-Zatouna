@@ -1606,6 +1606,34 @@ async fn backup_import_archive(
     }))
 }
 
+
+fn open_in_os(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", target])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Reveal a file or folder in the OS file manager.
 #[tauri::command(rename_all = "snake_case")]
 async fn open_path(
@@ -1618,12 +1646,7 @@ async fn open_path(
     if !p.exists() {
         return Err(ec_core::AppError::validation("المسار غير موجود").into());
     }
-    std::process::Command::new("xdg-open")
-        .arg(&p)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| ec_core::AppError::internal(e.to_string()))?;
+    open_in_os(&p.to_string_lossy()).map_err(ec_core::AppError::internal)?;
     Ok(())
 }
 
@@ -1757,12 +1780,7 @@ async fn open_external_url(
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(ec_core::AppError::validation("رابط غير صالح").into());
     }
-    std::process::Command::new("xdg-open")
-        .arg(&url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| ec_core::AppError::internal(e.to_string()))?;
+    open_in_os(&url).map_err(ec_core::AppError::internal)?;
     Ok(())
 }
 
