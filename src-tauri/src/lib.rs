@@ -1373,10 +1373,7 @@ async fn print_execute(
     ec_core::printing::log_print(&pool, actor.user_id, &document_type, id, code, "1", "print",
         path.to_string_lossy().as_ref(), &checksum).await.map_err(|e| ec_core::AppError::storage(e.to_string()))?;
     // open the PDF with the system's default viewer
-    #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(&path).spawn().ok();
-    #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd").args(["/C", "start", "", path.to_string_lossy().as_ref()]).spawn().ok();
+    open_in_os(&path.to_string_lossy()).ok();
     Ok(serde_json::json!({ "path": path.to_string_lossy(), "pages": ec_core::printing::page_count(&doc.template).unwrap_or(1) }))
 }
 
@@ -1610,8 +1607,11 @@ async fn backup_import_archive(
 fn open_in_os(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         std::process::Command::new("cmd")
             .args(["/C", "start", "", target])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
