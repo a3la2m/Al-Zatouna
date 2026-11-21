@@ -15,9 +15,49 @@
 
   let { children }: { children: import('svelte').Snippet } = $props();
 
+  type UpdateInfo = {
+    available: boolean;
+    current: string;
+    latest?: string;
+    url?: string;
+    notes?: string;
+  };
+  let updateInfo = $state<UpdateInfo | null>(null);
+  let updateDismissed = $state(false);
+
+  async function checkForUpdate() {
+    if (!isTauri) return;
+    try {
+      const info = await invoke<UpdateInfo>('check_for_update');
+      if (info?.available) {
+        const dismissed = localStorage.getItem('ec.dismissed_update');
+        if (dismissed !== info.latest) {
+          updateInfo = info;
+        }
+      }
+    } catch {
+      // silent — update check is best-effort
+    }
+  }
+
+  function dismissUpdate() {
+    if (updateInfo?.latest) localStorage.setItem('ec.dismissed_update', updateInfo.latest);
+    updateDismissed = true;
+  }
+
+  async function openUpdate() {
+    const url = updateInfo?.url || 'https://github.com/a3la2m/Al-Zatouna/releases/latest';
+    try {
+      await invoke('open_release_page', { url });
+    } catch {
+      window.open(url, '_blank');
+    }
+  }
+
   // Restore a remembered session on startup before any guard runs.
   onMount(() => {
     restoreSession();
+    void checkForUpdate();
 
     // Recover from accidental pinch/ctrl zoom and prevent it from getting stuck.
     if (isTauri) {
@@ -74,6 +114,40 @@
     <Alert kind="warn" onClose={dismissExpired}>
       انتهت الجلسة — أعد تسجيل الدخول للمتابعة.
     </Alert>
+  </div>
+{/if}
+
+{#if updateInfo?.available && !updateDismissed}
+  <div class="fixed bottom-4 left-4 z-[4000] w-[min(420px,calc(100vw-2rem))]" dir="rtl">
+    <div class="rounded-2xl border shadow-2xl p-4" style="background:var(--ec-surface); border-color:color-mix(in srgb, var(--ec-olive) 35%, var(--ec-border));">
+      <div class="flex items-start gap-3">
+        <div class="mt-0.5 flex h-10 w-10 flex-none items-center justify-center rounded-xl text-lg" style="background:var(--ec-olive-soft, #edf5e3); color:var(--ec-olive, #4d7a2f);">⬆</div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <h3 class="text-sm font-bold" style="color:var(--ec-text)">تحديث جديد متوفر</h3>
+            <span class="rounded-full px-2 py-0.5 text-[11px] font-bold" style="background:var(--ec-olive-soft, #edf5e3); color:var(--ec-olive, #4d7a2f);">v{updateInfo.latest}</span>
+          </div>
+          <p class="mt-1 text-xs leading-5" style="color:var(--ec-text-2)">
+            إصدار جديد من الزيتونة متاح (الإصدار الحالي v{updateInfo.current}). يُنصح بالتحديث للحصول على أحدث التحسينات والإصلاحات.
+          </p>
+          {#if updateInfo.notes}
+            <p class="mt-2 line-clamp-2 text-[11px] leading-5" style="color:var(--ec-text-3)">{updateInfo.notes}</p>
+          {/if}
+          <div class="mt-3 flex items-center gap-2">
+            <button
+              class="rounded-lg px-3 py-1.5 text-xs font-bold text-white transition hover:opacity-90"
+              style="background:var(--ec-olive, #4d7a2f);"
+              onclick={openUpdate}
+            >تحميل التحديث</button>
+            <button
+              class="rounded-lg px-3 py-1.5 text-xs font-semibold transition hover:bg-black/5"
+              style="color:var(--ec-text-2);"
+              onclick={dismissUpdate}
+            >لاحقاً</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 {/if}
 

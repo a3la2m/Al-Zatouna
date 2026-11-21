@@ -1784,6 +1784,103 @@ async fn open_external_url(
     Ok(())
 }
 
+// ---------- update check (GitHub Releases) ----------
+
+fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
+    let v = v.trim().trim_start_matches('v');
+    let mut parts = v.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts
+        .next()
+        .unwrap_or("0")
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .ok()?;
+    Some((major, minor, patch))
+}
+
+fn semver_is_newer(latest: &str, current: &str) -> bool {
+    match (parse_semver(latest), parse_semver(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => false,
+    }
+}
+
+/// Check GitHub releases for a newer version. No auth token required.
+#[tauri::command(rename_all = "snake_case")]
+async fn check_for_update() -> Result<serde_json::Value, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent(format!("Al-Zatouna/{}", env!("CARGO_PKG_VERSION")))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get("https://api.github.com/repos/a3la2m/Al-Zatouna/releases/latest")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Ok(serde_json::json!({
+                "available": false,
+                "current": env!("CARGO_PKG_VERSION"),
+                "reason": format!("http_{}", resp.status().as_u16())
+            }));
+        }
+        let body: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+        let tag = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+        let latest = tag.trim_start_matches('v').to_string();
+        let url = body
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("https://github.com/a3la2m/Al-Zatouna/releases/latest")
+            .to_string();
+        let notes = body
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(500)
+            .collect::<String>();
+        let published_at = body
+            .get("published_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let available = semver_is_newer(&latest, env!("CARGO_PKG_VERSION"));
+        Ok(serde_json::json!({
+            "available": available,
+            "current": env!("CARGO_PKG_VERSION"),
+            "latest": latest,
+            "tag": tag,
+            "url": url,
+            "notes": notes,
+            "published_at": published_at
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let _ = current;
+    Ok(result)
+}
+
+/// Open a GitHub release page for this app (no session token required).
+#[tauri::command(rename_all = "snake_case")]
+async fn open_release_page(url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    let allowed = url.starts_with("https://github.com/a3la2m/Al-Zatouna/releases")
+        || url == "https://github.com/a3la2m/Al-Zatouna/releases/latest";
+    if !allowed {
+        return Err("رابط تحديث غير مسموح".to_string());
+    }
+    open_in_os(&url)
+}
+
 // ---------- in-app notifications (Phase 22) ----------
 
 #[tauri::command(rename_all = "snake_case")]
@@ -2131,6 +2228,7 @@ pub fn run() {
             backup_export_archive, backup_import_archive, open_path,
             account_telegram_status, account_phone_set, account_telegram_link_code,
             account_telegram_unlink, open_external_url,
+            check_for_update, open_release_page,
             notifications_list, notifications_unseen, notifications_mark_seen,
             notifications_mark_all, notifications_clear,
             telegram_get_settings, telegram_save_settings, telegram_test,
